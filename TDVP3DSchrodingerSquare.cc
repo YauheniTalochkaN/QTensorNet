@@ -73,7 +73,9 @@ int main(int argc, char* argv[])
     {
         auto start = std::chrono::steady_clock::now();
         
-        size_t numSites = 64UL;
+        size_t Nx = 8UL;
+        size_t Ny = 8UL;
+        size_t numSites = Nx * Ny;
         int64_t physExtent = 2L;
         int64_t maxVirtualExtentVec = 600L;
         int64_t maxVirtualExtentOp = 100L;
@@ -96,7 +98,7 @@ int main(int argc, char* argv[])
 
         double dt = tmax / static_cast<double>(num_iter);
 
-        auto latt = SquareLattice(8L, 8L);
+        auto latt = SquareLattice(Nx, Ny);
 
         std::vector<std::vector<int64_t>> physExtentsVec(numSites, std::vector<int64_t>{physExtent});
 
@@ -104,9 +106,24 @@ int main(int argc, char* argv[])
 
         size_t root = numSites / 2UL;
 
-        for(size_t i = 0UL; i < numSites - 1UL; ++i)
+        for(size_t j = 0UL; j < Ny; ++j)
         {
-            graph.insert(std::make_tuple(i, i + 1UL, 1L));
+            for(size_t i = 0UL; i < Nx - 1UL; ++i)
+            {
+                graph.insert(std::make_tuple(i + Nx * j, i + 1UL + Nx * j, 1L));
+            }
+        }
+
+        for(size_t j = 0UL; j < 2UL * (Ny / 2UL) - 1UL; j += 2UL)
+        {
+            graph.insert(std::make_tuple(Nx - 1UL + Nx * j, Nx - 1UL + Nx * (j + 1UL), 1L));
+        }
+
+        size_t Ly = (Ny % 2UL == 0UL) ? Ny - 2UL : Ny - 1UL;
+
+        for(size_t j = 1UL; j < Ly; j += 2UL)
+        {
+            graph.insert(std::make_tuple(Nx * j, Nx * (j + 1UL), 1L));
         }
 
         QTensorNet::TensorNetwork psi(physExtentsVec, graph, root, maxVirtualExtentVec, numThreadsVec, workSpaceLimitVec);
@@ -283,7 +300,7 @@ int main(int argc, char* argv[])
 
             try
             {
-                psi.UpdateUsingTDVP(&hamiltonian, solver, dt, 0UL, 2UL, true, false, 0UL, optimizer_attributes, 5);
+                psi.UpdateUsingTDVP(&hamiltonian, solver, dt, root, 2UL, true, false, 0UL, optimizer_attributes, 5);
 
                 auto [norm_device, descNorm] = psi.GetDensityMatrix({}, true, 0UL, optimizer_attributes);
                 auto norm_host = QTensorNet::CuArrayMethods::GPUArrayToVector(norm_device, 1).at(0);
