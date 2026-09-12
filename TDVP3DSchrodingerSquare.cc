@@ -77,7 +77,7 @@ int main(int argc, char* argv[])
         size_t Ny = 8UL;
         size_t numSites = Nx * Ny;
         int64_t physExtent = 2L;
-        int64_t maxVirtualExtentVec = 600L;
+        int64_t maxVirtualExtentVec = 800L;
         int64_t maxVirtualExtentOp = 100L;
         double absCutoffVec = 0.0;
         double absCutoffOp = 0.0;
@@ -92,7 +92,7 @@ int main(int argc, char* argv[])
         {{CUTENSORNET_CONTRACTION_OPTIMIZER_CONFIG_HYPER_NUM_SAMPLES, 10},
          {CUTENSORNET_CONTRACTION_OPTIMIZER_CONFIG_RECONFIG_NUM_ITERATIONS, 1000}};
         
-        size_t num_iter = 200UL;
+        size_t num_iter = 100UL;
         double tmax = 1.0;
         double hz = 3.04438;
 
@@ -300,7 +300,7 @@ int main(int argc, char* argv[])
 
             try
             {
-                psi.UpdateUsingTDVP(&hamiltonian, solver, dt, root, 3UL, true, false, 0UL, optimizer_attributes, 5);
+                psi.UpdateUsingTDVP(&hamiltonian, solver, dt, root, 4UL, true, false, 0UL, optimizer_attributes, 5);
 
                 auto [norm_device, descNorm] = psi.GetDensityMatrix({}, true, 0UL, optimizer_attributes);
                 auto norm_host = QTensorNet::CuArrayMethods::GPUArrayToVector(norm_device, 1).at(0);
