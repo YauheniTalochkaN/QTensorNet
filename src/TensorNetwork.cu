@@ -177,7 +177,7 @@ namespace QTensorNet
             parent[edge.first] = edge.second;
         }
 
-        std::vector<size_t> phys_dims(numSites, 0UL);
+        std::vector<size_t> phys_dims(numSites, 1UL);
 
         for(const auto& term : OpTerms) 
         {
@@ -189,15 +189,6 @@ namespace QTensorNet
                 {
                     phys_dims[site] = static_cast<size_t>(std::sqrt(std::get<2>(op).size()));
                 }
-            }
-        }
-
-        for(size_t i = 0UL; i < numSites; ++i) 
-        {
-            if(phys_dims[i] == 0UL)
-            {
-                throw std::runtime_error("BuildOpTensors:"
-                                         "Physical dimension for site " + std::to_string(i) + " is zero.");
             }
         }
 
