@@ -99,7 +99,7 @@ namespace QTensorNet
         TensorNetwork(TensorNetwork&& other) noexcept;
         TensorNetwork& operator=(const TensorNetwork& other);
         TensorNetwork& operator=(TensorNetwork&& other) noexcept;
-        void Save(const std::string& path);
+        void Save(const std::string& path) const;
         void Load(const std::string& path);
         void SetSVDConfig(double absCutoff, 
                           double relCutoff, 
@@ -109,6 +109,7 @@ namespace QTensorNet
                           const void* svdParams = nullptr, size_t svdParamsSize = 0);
         void SetMaxVirtualExtent(int64_t val);
         void SetWorkSpacePreference(cutensornetWorksizePref_t pref);
+        void SetNumStreams(size_t numStreams);
         void SetWorkSpaceLimit(size_t val /*MBytes*/);
         void SetGlobalMode(bool mode);
         const Node& GetNode(size_t id) const;
@@ -130,7 +131,7 @@ namespace QTensorNet
         void* ComputeTwoSiteVector(size_t siteA, 
                                    size_t siteB,
                                    bool conjugate = false,
-                                   size_t stream_num = 0UL);
+                                   size_t stream_num = 0UL) const;
         void SetTwoSiteVector(size_t siteA, 
                               size_t siteB,
                               const void* tensorInAB,
@@ -180,19 +181,19 @@ namespace QTensorNet
                                          std::vector<int64_t> operatorExtents,
                                          const TensorNetwork* ConjPsi = nullptr,
                                          size_t stream_num = 0UL,
-                                         const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes = CuTensorNetMethods::optimalContractionOptimizerAttributes);
+                                         const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes = CuTensorNetMethods::optimalContractionOptimizerAttributes) const;
         complexType ComputeMatrixElement(const TensorNetwork* Omega,
                                          const TensorNetwork* ConjPsi = nullptr,
                                          size_t stream_num = 0UL,
-                                         const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes = CuTensorNetMethods::optimalContractionOptimizerAttributes);
+                                         const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes = CuTensorNetMethods::optimalContractionOptimizerAttributes) const;
         complexType ComputeOperatorTrace(const void* operatorData,
                                          std::vector<int32_t> operatorModes,
                                          std::vector<int64_t> operatorExtents,
                                          size_t stream_num = 0UL,
-                                         const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes = CuTensorNetMethods::optimalContractionOptimizerAttributes);
+                                         const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes = CuTensorNetMethods::optimalContractionOptimizerAttributes) const;
         complexType ComputeOperatorTrace(const TensorNetwork* Omega = nullptr,
                                          size_t stream_num = 0UL,
-                                         const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes = CuTensorNetMethods::optimalContractionOptimizerAttributes);
+                                         const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes = CuTensorNetMethods::optimalContractionOptimizerAttributes) const;
         void ExcludeExtraBond(size_t siteA, 
                               size_t siteB,
                               size_t stream_num = 0UL,
@@ -200,7 +201,7 @@ namespace QTensorNet
         std::pair<void*, TensorDescriptor> GetDensityMatrix(const std::vector<size_t>& keep_nodes = {},
                                                             bool circuit_order = true,
                                                             size_t stream_num = 0UL,
-                                                            const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes = CuTensorNetMethods::optimalContractionOptimizerAttributes);
+                                                            const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes = CuTensorNetMethods::optimalContractionOptimizerAttributes) const;
         std::pair<std::vector<const void*>, TensorNetDescriptor> EvaluateTensorNetDescriptorOfEffectiveOperator(const TensorNetwork* Omega,
                                                                                                                 CachedLeaves& cache,
                                                                                                                 const TensorNetwork* ConjPsi = nullptr,

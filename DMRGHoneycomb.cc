@@ -6,6 +6,37 @@
 #include "TensorNetwork.hh"
 #include "BasisGates.hh"
 #include "CuArrayMethods.hh"
+#include "ThreadPool.hh"
+
+void DoTask(QTensorNet::ThreadPool& pool, 
+            const std::function<void(const QTensorNet::TensorNetwork&, size_t, size_t, size_t)>& task, 
+            const QTensorNet::TensorNetwork& ttn,
+            size_t stream_num, size_t num_sites)
+{
+    size_t chunk_size = (num_sites + stream_num - 1) / stream_num;
+
+    std::vector<std::future<void>> futures;
+
+    for(size_t st = 0; st < stream_num; ++st)
+    {
+        size_t start = st * chunk_size;
+        size_t end = std::min(start + chunk_size, num_sites);
+
+        if(start < num_sites)
+        {
+            futures.emplace_back(pool.AddTask(task, ttn, st, start, end));
+        }
+        else
+        {
+            break;
+        }
+    }
+
+    for(auto& future : futures)
+    {
+        future.get();
+    }
+};
 
 int main(int argc, char* argv[])
 {
@@ -47,7 +78,7 @@ int main(int argc, char* argv[])
     {
         auto start = std::chrono::steady_clock::now();
 
-        size_t numSites = 80UL;
+        size_t numSites = 60UL;
         int64_t physExtent = 2L;
         int64_t maxVirtualExtentTTS = 800L;
         int64_t maxVirtualExtentTTO = 200L;
@@ -57,6 +88,9 @@ int main(int argc, char* argv[])
         double relCutoffTTO = 1.0e-8;
         size_t workSpaceLimitTTS = 50UL * 1024UL;
         size_t workSpaceLimitTTO = 50UL * 1024UL;
+
+        size_t num_threads = 10UL;
+        QTensorNet::ThreadPool pool(num_threads);
 
         QTensorNet::CuTensorNetMethods::ContractionOptimizerAttributes optimizer_attributes = 
         {{CUTENSORNET_CONTRACTION_OPTIMIZER_CONFIG_HYPER_NUM_SAMPLES, 1000},
@@ -70,11 +104,11 @@ int main(int argc, char* argv[])
                                                    400UL, 400UL,
                                                    600UL, 600UL};
     
-        size_t rootTTS = 76UL;
-        size_t rootTTO = 76UL;
+        size_t rootTTS = 54UL;
+        size_t rootTTO = 54UL;
 
         QTensorNet::complexType J(-1.0, 0.0);
-        QTensorNet::complexType dJ(-1.0, 0.0);
+        QTensorNet::complexType dJ(-0.9, 0.0);
 
         std::vector<double> phi_list = {2.0 * M_PI / 3.0, -2.0 * M_PI / 3.0, 0.0};
 
@@ -95,22 +129,22 @@ int main(int argc, char* argv[])
                                                                 {8, 9, 2}, {10, 11, 2}, {13, 14, 2}, {16, 17, 2}, {18, 19, 2}, 
                                                                 {21, 22, 2}, {24, 25, 2}, {26, 27, 2}, {29, 30, 2}}; */
 
-        std::vector<std::tuple<size_t, size_t, size_t>> latt = {{1, 3, 0}, {5, 7, 0}, {9, 11, 0}, {13, 15, 0}, {2, 16, 0}, {6, 18, 0}, {10, 20, 0}, {14, 22, 0}, 
-                                                                {17, 25, 0}, {19, 27, 0}, {21, 29, 0}, {23, 31, 0}, {24, 32, 0}, {26, 34, 0}, {28, 36, 0}, 
-                                                                {30, 38, 0}, {33, 41, 0}, {35, 43, 0}, {37, 45, 0}, {39, 47, 0}, {40, 48, 0}, {42, 50, 0}, 
-                                                                {44, 52, 0}, {46, 54, 0}, {49, 57, 0}, {51, 59, 0}, {53, 61, 0}, {55, 63, 0}, {56, 64, 0}, 
-                                                                {58, 66, 0}, {60, 68, 0}, {62, 70, 0}, {65, 73, 0}, {67, 75, 0}, {69, 77, 0}, {71, 79, 0}, 
-                                                                {0, 72, 0}, {4, 74, 0}, {8, 76, 0}, {12, 78, 0}, {0, 2, 1}, {4, 6, 1}, {8, 10, 1}, {12, 14, 1}, 
-                                                                {3, 17, 1}, {7, 19, 1}, {11, 21, 1}, {15, 23, 1}, {16, 24, 1}, {18, 26, 1}, {20, 28, 1}, 
-                                                                {22, 30, 1}, {25, 33, 1}, {27, 35, 1}, {29, 37, 1}, {31, 39, 1}, {32, 40, 1}, {34, 42, 1}, 
-                                                                {36, 44, 1}, {38, 46, 1}, {41, 49, 1}, {43, 51, 1}, {45, 53, 1}, {47, 55, 1}, {48, 56, 1}, 
-                                                                {50, 58, 1}, {52, 60, 1}, {54, 62, 1}, {57, 65, 1}, {59, 67, 1}, {61, 69, 1}, {63, 71, 1}, 
-                                                                {64, 72, 1}, {66, 74, 1}, {68, 76, 1}, {70, 78, 1}, {1, 73, 1}, {5, 75, 1}, {9, 77, 1}, 
-                                                                {13, 79, 1}, {0, 1, 2}, {4, 5, 2}, {8, 9, 2}, {12, 13, 2}, {3, 6, 2}, {7, 10, 2}, {11, 14, 2}, 
-                                                                {16, 17, 2}, {18, 19, 2}, {20, 21, 2}, {22, 23, 2}, {25, 26, 2}, {27, 28, 2}, {29, 30, 2}, 
-                                                                {32, 33, 2}, {34, 35, 2}, {36, 37, 2}, {38, 39, 2}, {41, 42, 2}, {43, 44, 2}, {45, 46, 2}, 
-                                                                {48, 49, 2}, {50, 51, 2}, {52, 53, 2}, {54, 55, 2}, {57, 58, 2}, {59, 60, 2}, {61, 62, 2}, 
-                                                                {64, 65, 2}, {66, 67, 2}, {68, 69, 2}, {70, 71, 2}, {73, 74, 2}, {75, 76, 2}, {77, 78, 2}};
+        std::vector<std::tuple<size_t, size_t, size_t>> latt = {{1, 3, 0}, {5, 7, 0}, {9, 11, 0}, {2, 12, 0}, {6, 14, 0}, {10, 16, 0}, 
+                                                                {13, 19, 0}, {15, 21, 0}, {17, 23, 0}, {18, 24, 0}, {20, 26, 0}, 
+                                                                {22, 28, 0}, {25, 31, 0}, {27, 33, 0}, {29, 35, 0}, {30, 36, 0}, 
+                                                                {32, 38, 0}, {34, 40, 0}, {37, 43, 0}, {39, 45, 0}, {41, 47, 0}, 
+                                                                {42, 48, 0}, {44, 50, 0}, {46, 52, 0}, {49, 55, 0}, {51, 57, 0}, 
+                                                                {53, 59, 0}, {0, 54, 0}, {4, 56, 0}, {8, 58, 0}, {0, 2, 1}, 
+                                                                {4, 6, 1}, {8, 10, 1}, {3, 13, 1}, {7, 15, 1}, {11, 17, 1}, {12, 18, 1}, 
+                                                                {14, 20, 1}, {16, 22, 1}, {19, 25, 1}, {21, 27, 1}, {23, 29, 1}, 
+                                                                {24, 30, 1}, {26, 32, 1}, {28, 34, 1}, {31, 37, 1}, {33, 39, 1}, 
+                                                                {35, 41, 1}, {36, 42, 1}, {38, 44, 1}, {40, 46, 1}, {43, 49, 1}, 
+                                                                {45, 51, 1}, {47, 53, 1}, {48, 54, 1}, {50, 56, 1}, {52, 58, 1}, 
+                                                                {1, 55, 1}, {5, 57, 1}, {9, 59, 1}, {0, 1, 2}, {4, 5, 2}, {8, 9, 2}, 
+                                                                {3, 6, 2}, {7, 10, 2}, {12, 13, 2}, {14, 15, 2}, {16, 17, 2}, {19, 20, 2}, 
+                                                                {21, 22, 2}, {24, 25, 2}, {26, 27, 2}, {28, 29, 2}, {31, 32, 2}, 
+                                                                {33, 34, 2}, {36, 37, 2}, {38, 39, 2}, {40, 41,  2}, {43, 44, 2}, {45, 46, 2}, 
+                                                                {48, 49, 2}, {50, 51, 2}, {52, 53, 2}, {55, 56, 2}, {57, 58, 2}};
 
         /* QTensorNet::virtualModesGraphType graph = {{1, 3, 1},   {2, 6, 1},   {5, 10, 1},  {11, 15, 1}, {13, 17, 1}, 
                                                    {16, 20, 1}, {19, 22, 1}, {4, 2, 1},   {3, 7, 1},   {6, 8, 1}, 
@@ -125,19 +159,17 @@ int main(int argc, char* argv[])
                                                    {19, 23, 1}, {22, 26, 1}, {25, 29, 1}, {27, 31, 1}, {0, 1, 1}, 
                                                    {4, 5, 1}, {16, 17, 1}, {18, 19, 1}, {24, 25, 1}, {26, 27, 1}, {29, 30, 1}}; */
 
-        QTensorNet::virtualModesGraphType graph = {{1, 3, 1}, {5, 7, 1}, {9, 11, 1}, {13, 15, 1}, {2, 16, 1}, {6, 18, 1}, 
-                                                   {10, 20, 1}, {14, 22, 1}, {17, 25, 1}, {19, 27, 1}, {21, 29, 1}, {23, 31, 1}, 
-                                                   {24, 32, 1}, {26, 34, 1}, {28, 36, 1}, {30, 38, 1}, {33, 41, 1}, {35, 43, 1}, 
-                                                   {37, 45, 1}, {39, 47, 1}, {40, 48, 1}, {42, 50, 1}, {44, 52, 1}, {46, 54, 1}, 
-                                                   {49, 57, 1}, {51, 59, 1}, {53, 61, 1}, {55, 63, 1}, {56, 64, 1}, {58, 66, 1}, 
-                                                   {60, 68, 1}, {62, 70, 1}, {65, 73, 1}, {67, 75, 1}, {69, 77, 1}, {71, 79, 1}, 
-                                                   {0, 2, 1}, {4, 6, 1}, {8, 10, 1}, {12, 14, 1}, {3, 17, 1}, {7, 19, 1}, 
-                                                   {11, 21, 1}, {15, 23, 1}, {16, 24, 1}, {18, 26, 1}, {20, 28, 1}, {22, 30, 1}, 
-                                                   {25, 33, 1}, {27, 35, 1}, {29, 37, 1}, {31, 39, 1}, {32, 40, 1}, {34, 42, 1}, 
-                                                   {36, 44, 1}, {38, 46, 1}, {41, 49, 1}, {43, 51, 1}, {45, 53, 1}, {47, 55, 1}, 
-                                                   {48, 56, 1}, {50, 58, 1}, {52, 60, 1}, {54, 62, 1}, {57, 65, 1}, {59, 67, 1}, 
-                                                   {61, 69, 1}, {63, 71, 1}, {64, 72, 1}, {66, 74, 1}, {68, 76, 1}, {70, 78, 1}, 
-                                                   {0, 1, 1}, {4, 5, 1}, {8, 9, 1}, {12, 13, 1}, {73, 74, 1}, {75, 76, 1}, {77, 78, 1}};
+        QTensorNet::virtualModesGraphType graph = {{1, 3, 1}, {5, 7, 1}, {9, 11, 1}, {2, 12, 1}, {6, 14, 1}, {10, 16, 1}, 
+                                                   {13, 19, 1}, {15, 21, 1}, {17, 23, 1}, {18, 24, 1}, {20, 26, 1}, 
+                                                   {22, 28, 1}, {25, 31, 1}, {27, 33, 1}, {29, 35, 1}, {30, 36, 1}, 
+                                                   {32, 38, 1}, {34, 40, 1}, {37, 43, 1}, {39, 45, 1}, {41, 47, 1}, 
+                                                   {42, 48, 1}, {44, 50, 1}, {46, 52, 1}, {49, 55, 1}, {51, 57, 1}, 
+                                                   {53, 59, 1}, {0, 2, 1}, {4, 6, 1}, {8, 10, 1}, {3, 13, 1}, {7, 15, 1}, 
+                                                   {11, 17, 1}, {12, 18, 1}, {14, 20, 1}, {16, 22, 1}, {19, 25, 1}, 
+                                                   {21, 27, 1}, {23, 29, 1}, {24, 30, 1}, {26, 32, 1}, {28, 34, 1}, 
+                                                   {31, 37, 1}, {33, 39, 1}, {35, 41, 1}, {36, 42, 1}, {38, 44, 1}, 
+                                                   {40, 46, 1}, {43, 49, 1}, {45, 51, 1}, {47, 53, 1}, {48, 54, 1}, 
+                                                   {50, 56, 1}, {52, 58, 1}, {0, 1, 1}, {4, 5, 1}, {8, 9, 1}, {55, 56, 1}, {57, 58, 1}};
 
         std::vector<std::vector<int64_t>> physExtentsVec(numSites, std::vector<int64_t>{physExtent});
 
@@ -196,6 +228,97 @@ int main(int argc, char* argv[])
         
         auto SS_host = QTensorNet::BasisGates::SigmaISigmaJSum(0.25, 0.25, 0.25);
         void* SS_device = QTensorNet::CuArrayMethods::VectorToGPUArray(SS_host);
+
+        //---lambda functions--------------------------------------------------------------
+
+        std::vector<std::tuple<QTensorNet::complexType, 
+                               QTensorNet::complexType, 
+                               QTensorNet::complexType>> S_obs(numSites);
+
+        std::vector<std::pair<size_t, size_t>> pairs;
+        
+        for(size_t i = 0UL; i < numSites; ++i)
+        {
+            for(size_t j = i + 1UL; j < numSites; ++j)
+            {
+                pairs.emplace_back(i, j);
+            }
+        }
+
+        std::vector<QTensorNet::complexType> SS_obs(pairs.size());
+
+        auto thread_func_S_obs = [Sx_device, Sy_device, Sz_device, &S_obs, &optimizer_attributes]
+                                 (const QTensorNet::TensorNetwork& tts, size_t stream_num, size_t start, size_t end) 
+        {
+            for(size_t k = start; k < end; ++k)
+            {
+                try
+                {
+                    std::vector<int32_t> SkModes = {tts.GetNode(k).physModes_[0], 
+                                                    tts.GetNode(k).physModes_[0]};
+                    std::vector<int64_t> SkExtents = {2, 2};
+
+                    QTensorNet::complexType Sx = tts.ComputeMatrixElement(Sx_device, 
+                                                                          SkModes, 
+                                                                          SkExtents,
+                                                                          nullptr,
+                                                                          stream_num, 
+                                                                          optimizer_attributes);
+
+                    QTensorNet::complexType Sy = tts.ComputeMatrixElement(Sy_device, 
+                                                                          SkModes, 
+                                                                          SkExtents,
+                                                                          nullptr,
+                                                                          stream_num, 
+                                                                          optimizer_attributes);
+                    
+                    QTensorNet::complexType Sz = tts.ComputeMatrixElement(Sz_device, 
+                                                                          SkModes, 
+                                                                          SkExtents,
+                                                                          nullptr,
+                                                                          stream_num, 
+                                                                          optimizer_attributes);
+
+                    S_obs.at(k) = {Sx, Sy, Sz};
+                }
+                catch(const std::exception& ex)
+                {
+                    std::cerr << ex.what() << std::endl;
+                    std::exit(1);
+                }
+            }
+        };
+
+        auto thread_func_SS_obs = [SS_device, &SS_obs, &pairs, &optimizer_attributes]
+                                  (const QTensorNet::TensorNetwork& tts, size_t stream_num, size_t start, size_t end) 
+        {
+            for(size_t k = start; k < end; ++k)
+            {
+                try
+                {
+                    auto [i, j] = pairs.at(k);
+                    
+                    std::vector<int32_t> SiSjModes = {tts.GetNode(i).physModes_[0],
+                                                      tts.GetNode(j).physModes_[0], 
+                                                      tts.GetNode(i).physModes_[0],
+                                                      tts.GetNode(j).physModes_[0]};
+                    std::vector<int64_t> SiSjExtents = {2, 2, 2, 2};
+                    
+                    SS_obs.at(k) = tts.ComputeMatrixElement(SS_device, 
+                                                            SiSjModes, 
+                                                            SiSjExtents,
+                                                            nullptr,
+                                                            stream_num, 
+                                                            optimizer_attributes);
+
+                }
+                catch(const std::exception& ex)
+                {
+                    std::cerr << ex.what() << std::endl;
+                    std::exit(1);
+                }
+            }
+        };
 
         //---------------------------------------------------------------------------------
 
@@ -297,78 +420,43 @@ int main(int argc, char* argv[])
                 std::chrono::duration<double> elapsedGS = finishGS - startGS;
                 std::cout << "Spent time for ground state evaluation: " << elapsedGS.count() << " s." << std::endl;
 
+                auto startOBS = std::chrono::steady_clock::now();
+
+                QTensorNet::CuTensorNetMethods::MPI_ = false;
+                
+                tts_ground.SetNumStreams(num_threads);
+
+                DoTask(pool, thread_func_S_obs, tts_ground, num_threads, numSites);
+                DoTask(pool, thread_func_SS_obs, tts_ground, num_threads, pairs.size());
+
+                tts_ground.SetNumStreams(1UL);
+
+                if(numProcs > 1)
+                {
+                    QTensorNet::CuTensorNetMethods::MPI_ = true;
+                }
+
                 std::cout << "<Psi_ground| S_i * S_j |Psi_ground>: " << std::endl;
 
-                for(size_t i = 0UL; i < numSites; ++i)
+                for(size_t k = 0UL; k < pairs.size(); ++k)
                 {
-                    for(size_t j = i + 1UL; j < numSites; ++j)
-                    {
-                        try
-                        {
-                            std::vector<int32_t> SiSjModes = {tts_ground.GetNode(i).physModes_[0],
-                                                              tts_ground.GetNode(j).physModes_[0], 
-                                                              tts_ground.GetNode(i).physModes_[0],
-                                                              tts_ground.GetNode(j).physModes_[0]};
-                            std::vector<int64_t> SiSjExtents = {2, 2, 2, 2};
-                            
-                            QTensorNet::complexType SS = tts_ground.ComputeMatrixElement(SS_device, 
-                                                                                         SiSjModes, 
-                                                                                         SiSjExtents,
-                                                                                         nullptr,
-                                                                                         /*stream_num*/ 0UL, 
-                                                                                         /*optimizerAttributes*/ optimizer_attributes);
-
-                            std::cout << i << "\t" << j << "\t" << SS << std::endl;
-                        }
-                        catch(const std::exception& ex)
-                        {
-                            std::cerr << ex.what() << std::endl;
-                            std::exit(1);
-                        }
-                    }
+                    auto [i, j] = pairs[k];
+                    
+                    std::cout << i << "\t" << j << "\t" << SS_obs[k] << std::endl;
                 }
 
                 std::cout << "<Psi_ground| S_i |Psi_ground>: " << std::endl;
 
-                for(size_t i = 0UL; i < numSites; ++i)
+                for(size_t k = 0UL; k < numSites; ++k)
                 {
-                    try
-                    {
-                        std::vector<int32_t> SiModes = {tts_ground.GetNode(i).physModes_[0], 
-                                                        tts_ground.GetNode(i).physModes_[0]};
-                        std::vector<int64_t> SiExtents = {2, 2};
-
-                        QTensorNet::complexType Sx = tts_ground.ComputeMatrixElement(Sx_device, 
-                                                                                     SiModes, 
-                                                                                     SiExtents,
-                                                                                     nullptr,
-                                                                                     /*stream_num*/ 0UL, 
-                                                                                     /*optimizerAttributes*/ optimizer_attributes);
-
-                        QTensorNet::complexType Sy = tts_ground.ComputeMatrixElement(Sy_device, 
-                                                                                     SiModes, 
-                                                                                     SiExtents,
-                                                                                     nullptr,
-                                                                                     /*stream_num*/ 0UL, 
-                                                                                     /*optimizerAttributes*/ optimizer_attributes);
-                        
-                        QTensorNet::complexType Sz = tts_ground.ComputeMatrixElement(Sz_device, 
-                                                                                     SiModes, 
-                                                                                     SiExtents,
-                                                                                     nullptr,
-                                                                                     /*stream_num*/ 0UL, 
-                                                                                     /*optimizerAttributes*/ optimizer_attributes);
-
-                        std::cout << i << "\t" << Sx << "\t" << Sy << "\t" << Sz << std::endl;
-                    }
-                    catch(const std::exception& ex)
-                    {
-                        std::cerr << ex.what() << std::endl;
-                        std::exit(1);
-                    }
+                    auto [Sx, Sy, Sz] = S_obs[k];
+                    
+                    std::cout << k << "\t" << Sx << "\t" << Sy << "\t" << Sz << std::endl;
                 }
 
-                std::cout << std::endl;
+                auto finishOBS = std::chrono::steady_clock::now();
+                std::chrono::duration<double> elapsedOBS = finishOBS - startOBS;
+                std::cout << "Spent time for evaluation of observables: " << elapsedOBS.count() << " s.\n" << std::endl;
             }
         }
 

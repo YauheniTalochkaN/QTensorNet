@@ -6,6 +6,7 @@
 #include "TensorNetwork.hh"
 #include "BasisGates.hh"
 #include "CuArrayMethods.hh"
+#include "ThreadPool.hh"
 
 std::vector<std::tuple<size_t, size_t, size_t>> SquareKagomeLattice(int64_t Nx, int64_t Ny)
 {
@@ -58,6 +59,36 @@ std::vector<std::tuple<size_t, size_t, size_t>> SquareKagomeLattice(int64_t Nx, 
     return latt;
 }
 
+void DoTask(QTensorNet::ThreadPool& pool, 
+            const std::function<void(const QTensorNet::TensorNetwork&, size_t, size_t, size_t)>& task, 
+            const QTensorNet::TensorNetwork& ttn,
+            size_t stream_num, size_t num_sites)
+{
+    size_t chunk_size = (num_sites + stream_num - 1) / stream_num;
+
+    std::vector<std::future<void>> futures;
+
+    for(size_t st = 0; st < stream_num; ++st)
+    {
+        size_t start = st * chunk_size;
+        size_t end = std::min(start + chunk_size, num_sites);
+
+        if(start < num_sites)
+        {
+            futures.emplace_back(pool.AddTask(task, ttn, st, start, end));
+        }
+        else
+        {
+            break;
+        }
+    }
+
+    for(auto& future : futures)
+    {
+        future.get();
+    }
+};
+
 int main(int argc, char* argv[])
 {
     HANDLE_MPI_ERROR(MPI_Init(&argc, &argv));
@@ -108,6 +139,9 @@ int main(int argc, char* argv[])
         double relCutoffMPO = 1.0e-8;
         size_t workSpaceLimitMPS = 50UL * 1024UL;
         size_t workSpaceLimitMPO = 50UL * 1024UL;
+
+        size_t num_threads = 10UL;
+        QTensorNet::ThreadPool pool(num_threads);
 
         QTensorNet::CuTensorNetMethods::ContractionOptimizerAttributes optimizer_attributes = 
         {{CUTENSORNET_CONTRACTION_OPTIMIZER_CONFIG_HYPER_NUM_SAMPLES, 1000},
@@ -203,6 +237,97 @@ int main(int argc, char* argv[])
         auto SS_host = QTensorNet::BasisGates::SigmaISigmaJSum(0.25, 0.25, 0.25);
         void* SS_device = QTensorNet::CuArrayMethods::VectorToGPUArray(SS_host);
 
+        //---lambda functions--------------------------------------------------------------
+
+        std::vector<std::tuple<QTensorNet::complexType, 
+                               QTensorNet::complexType, 
+                               QTensorNet::complexType>> S_obs(numSites);
+
+        std::vector<std::pair<size_t, size_t>> pairs;
+        
+        for(size_t i = 0UL; i < numSites; ++i)
+        {
+            for(size_t j = i + 1UL; j < numSites; ++j)
+            {
+                pairs.emplace_back(i, j);
+            }
+        }
+
+        std::vector<QTensorNet::complexType> SS_obs(pairs.size());
+
+        auto thread_func_S_obs = [Sx_device, Sy_device, Sz_device, &S_obs, &optimizer_attributes]
+                                 (const QTensorNet::TensorNetwork& mps, size_t stream_num, size_t start, size_t end) 
+        {
+            for(size_t k = start; k < end; ++k)
+            {
+                try
+                {
+                    std::vector<int32_t> SkModes = {mps.GetNode(k).physModes_[0], 
+                                                    mps.GetNode(k).physModes_[0]};
+                    std::vector<int64_t> SkExtents = {2, 2};
+
+                    QTensorNet::complexType Sx = mps.ComputeMatrixElement(Sx_device, 
+                                                                          SkModes, 
+                                                                          SkExtents,
+                                                                          nullptr,
+                                                                          stream_num, 
+                                                                          optimizer_attributes);
+
+                    QTensorNet::complexType Sy = mps.ComputeMatrixElement(Sy_device, 
+                                                                          SkModes, 
+                                                                          SkExtents,
+                                                                          nullptr,
+                                                                          stream_num, 
+                                                                          optimizer_attributes);
+                    
+                    QTensorNet::complexType Sz = mps.ComputeMatrixElement(Sz_device, 
+                                                                          SkModes, 
+                                                                          SkExtents,
+                                                                          nullptr,
+                                                                          stream_num, 
+                                                                          optimizer_attributes);
+
+                    S_obs.at(k) = {Sx, Sy, Sz};
+                }
+                catch(const std::exception& ex)
+                {
+                    std::cerr << ex.what() << std::endl;
+                    std::exit(1);
+                }
+            }
+        };
+
+        auto thread_func_SS_obs = [SS_device, &SS_obs, &pairs, &optimizer_attributes]
+                                  (const QTensorNet::TensorNetwork& mps, size_t stream_num, size_t start, size_t end) 
+        {
+            for(size_t k = start; k < end; ++k)
+            {
+                try
+                {
+                    auto [i, j] = pairs.at(k);
+                    
+                    std::vector<int32_t> SiSjModes = {mps.GetNode(i).physModes_[0],
+                                                      mps.GetNode(j).physModes_[0], 
+                                                      mps.GetNode(i).physModes_[0],
+                                                      mps.GetNode(j).physModes_[0]};
+                    std::vector<int64_t> SiSjExtents = {2, 2, 2, 2};
+                    
+                    SS_obs.at(k) = mps.ComputeMatrixElement(SS_device, 
+                                                            SiSjModes, 
+                                                            SiSjExtents,
+                                                            nullptr,
+                                                            stream_num, 
+                                                            optimizer_attributes);
+
+                }
+                catch(const std::exception& ex)
+                {
+                    std::cerr << ex.what() << std::endl;
+                    std::exit(1);
+                }
+            }
+        };
+
         //---------------------------------------------------------------------------------
 
         std::cout << "\nLooking for the ground MPS vector of the hamiltonian..." << std::endl;
@@ -282,78 +407,43 @@ int main(int argc, char* argv[])
             std::chrono::duration<double> elapsedGS = finishGS - startGS;
             std::cout << "Spent time for ground state evaluation: " << elapsedGS.count() << " s." << std::endl;
 
+            auto startOBS = std::chrono::steady_clock::now();
+
+            QTensorNet::CuTensorNetMethods::MPI_ = false;
+            
+            mps_ground.SetNumStreams(num_threads);
+
+            DoTask(pool, thread_func_S_obs, mps_ground, num_threads, numSites);
+            DoTask(pool, thread_func_SS_obs, mps_ground, num_threads, pairs.size());
+
+            mps_ground.SetNumStreams(1UL);
+
+            if(numProcs > 1)
+            {
+                QTensorNet::CuTensorNetMethods::MPI_ = true;
+            }
+
             std::cout << "<Psi_ground| S_i * S_j |Psi_ground>: " << std::endl;
 
-            for(size_t i = 0UL; i < numSites; ++i)
+            for(size_t k = 0UL; k < pairs.size(); ++k)
             {
-                for(size_t j = i + 1UL; j < numSites; ++j)
-                {
-                    try
-                    {
-                        std::vector<int32_t> SiSjModes = {mps_ground.GetNode(i).physModes_[0],
-                                                          mps_ground.GetNode(j).physModes_[0], 
-                                                          mps_ground.GetNode(i).physModes_[0],
-                                                          mps_ground.GetNode(j).physModes_[0]};
-                        std::vector<int64_t> SiSjExtents = {2, 2, 2, 2};
-                        
-                        QTensorNet::complexType SS = mps_ground.ComputeMatrixElement(SS_device, 
-                                                                                     SiSjModes, 
-                                                                                     SiSjExtents,
-                                                                                     nullptr,
-                                                                                     /*stream_num*/ 0UL, 
-                                                                                     /*optimizerAttributes*/ optimizer_attributes);
-
-                        std::cout << i << "\t" << j << "\t" << SS << std::endl;
-                    }
-                    catch(const std::exception& ex)
-                    {
-                        std::cerr << ex.what() << std::endl;
-                        std::exit(1);
-                    }
-                }
+                auto [i, j] = pairs[k];
+                
+                std::cout << i << "\t" << j << "\t" << SS_obs[k] << std::endl;
             }
 
             std::cout << "<Psi_ground| S_i |Psi_ground>: " << std::endl;
 
-            for(size_t i = 0UL; i < numSites; ++i)
+            for(size_t k = 0UL; k < numSites; ++k)
             {
-                try
-                {
-                    std::vector<int32_t> SiModes = {mps_ground.GetNode(i).physModes_[0], 
-                                                    mps_ground.GetNode(i).physModes_[0]};
-                    std::vector<int64_t> SiExtents = {2, 2};
-
-                    QTensorNet::complexType Sx = mps_ground.ComputeMatrixElement(Sx_device, 
-                                                                                 SiModes, 
-                                                                                 SiExtents,
-                                                                                 nullptr,
-                                                                                 /*stream_num*/ 0UL, 
-                                                                                 /*optimizerAttributes*/ optimizer_attributes);
-
-                    QTensorNet::complexType Sy = mps_ground.ComputeMatrixElement(Sy_device, 
-                                                                                 SiModes, 
-                                                                                 SiExtents,
-                                                                                 nullptr,
-                                                                                 /*stream_num*/ 0UL, 
-                                                                                 /*optimizerAttributes*/ optimizer_attributes);
-                    
-                    QTensorNet::complexType Sz = mps_ground.ComputeMatrixElement(Sz_device, 
-                                                                                 SiModes, 
-                                                                                 SiExtents,
-                                                                                 nullptr,
-                                                                                 /*stream_num*/ 0UL, 
-                                                                                 /*optimizerAttributes*/ optimizer_attributes);
-
-                    std::cout << i << "\t" << Sx << "\t" << Sy << "\t" << Sz << std::endl;
-                }
-                catch(const std::exception& ex)
-                {
-                    std::cerr << ex.what() << std::endl;
-                    std::exit(1);
-                }
+                auto [Sx, Sy, Sz] = S_obs[k];
+                
+                std::cout << k << "\t" << Sx << "\t" << Sy << "\t" << Sz << std::endl;
             }
 
-            std::cout << std::endl;
+            auto finishOBS = std::chrono::steady_clock::now();
+            std::chrono::duration<double> elapsedOBS = finishOBS - startOBS;
+            std::cout << "Spent time for evaluation of observables: " << elapsedOBS.count() << " s.\n" << std::endl;
 
             B += dB;
         }

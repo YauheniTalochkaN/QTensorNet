@@ -10,20 +10,20 @@
 
 void DoTask(QTensorNet::ThreadPool& pool, 
             const std::function<void(size_t, size_t, size_t)>& task, 
-            size_t num_threads, size_t num_sites)
+            size_t stream_num, size_t num_sites)
 {
-    size_t chunk_size = (num_sites + num_threads - 1) / num_threads;
+    size_t chunk_size = (num_sites + stream_num - 1) / stream_num;
 
     std::vector<std::future<void>> futures;
 
-    for(size_t th = 0; th < num_threads; ++th)
+    for(size_t st = 0; st < stream_num; ++st)
     {
-        size_t start = th * chunk_size;
+        size_t start = st * chunk_size;
         size_t end = std::min(start + chunk_size, num_sites);
 
         if(start < num_sites)
         {
-            futures.emplace_back(pool.AddTask(task, th, start, end));
+            futures.emplace_back(pool.AddTask(task, st, start, end));
         }
         else
         {

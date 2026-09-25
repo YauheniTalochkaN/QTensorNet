@@ -767,7 +767,7 @@ namespace QTensorNet
         return *this;
     }
 
-    void TensorNetwork::Save(const std::string& path)
+    void TensorNetwork::Save(const std::string& path) const
     {
         std::filesystem::path dirPath(path);
     
@@ -1244,6 +1244,35 @@ namespace QTensorNet
         workSpacePreference_ = pref;
     }
 
+    void TensorNetwork::SetNumStreams(size_t numStreams)
+    {
+        if(numStreams == numStreams_)
+        {
+            return;
+        }
+
+        if(numStreams > numStreams_)
+        {
+            streams_.resize(numStreams, nullptr);
+
+            for(size_t i = numStreams_; i < numStreams; ++i)
+            {
+                HANDLE_CUDA_ERROR(cudaStreamCreate(&streams_[i]));
+            }
+        }
+        else
+        {
+            for(size_t i = numStreams; i < numStreams_; ++i)
+            {
+                HANDLE_CUDA_ERROR(cudaStreamDestroy(streams_[i]));
+            }
+            
+            streams_.resize(numStreams);
+        }
+
+        numStreams_ = numStreams;
+    }
+
     void TensorNetwork::SetWorkSpaceLimit(size_t val)
     {
         if(val < 1UL)
@@ -1584,7 +1613,7 @@ namespace QTensorNet
     void* TensorNetwork::ComputeTwoSiteVector(size_t siteA, 
                                               size_t siteB,
                                               bool conjugate,
-                                              size_t stream_num)
+                                              size_t stream_num) const
     {
         if(check_)
         {
@@ -3497,7 +3526,7 @@ namespace QTensorNet
                                                     std::vector<int64_t> operatorExtents,
                                                     const TensorNetwork* ConjPsi,
                                                     size_t stream_num,
-                                                    const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes)
+                                                    const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes) const
     {        
         if(check_)
         {
@@ -3731,7 +3760,7 @@ namespace QTensorNet
     complexType TensorNetwork::ComputeMatrixElement(const TensorNetwork* Omega,
                                                     const TensorNetwork* ConjPsi,
                                                     size_t stream_num,
-                                                    const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes)
+                                                    const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes) const
     {
         if(check_)
         {
@@ -3956,7 +3985,7 @@ namespace QTensorNet
                                                     std::vector<int32_t> operatorModes,
                                                     std::vector<int64_t> operatorExtents,
                                                     size_t stream_num,
-                                                    const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes)
+                                                    const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes) const
     {
         if(check_)
         {
@@ -4129,7 +4158,7 @@ namespace QTensorNet
 
     complexType TensorNetwork::ComputeOperatorTrace(const TensorNetwork* Omega,
                                                     size_t stream_num,
-                                                    const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes)
+                                                    const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes) const
     {
         if(check_)
         {
@@ -4545,7 +4574,7 @@ namespace QTensorNet
     std::pair<void*, TensorDescriptor> TensorNetwork::GetDensityMatrix(const std::vector<size_t>& keep_nodes,
                                                                        bool circuit_order,
                                                                        size_t stream_num,
-                                                                       const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes)
+                                                                       const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes) const
     {
         if(check_)
         {
