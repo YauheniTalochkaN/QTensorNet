@@ -437,7 +437,7 @@ int main(int argc, char* argv[])
     
     std::ofstream outFile1("ExpectedSigmaZ_1DChain.txt");
     
-    if (!outFile1.is_open()) 
+    if(!outFile1.is_open()) 
     {
         std::cerr << "Error when creating expectations file." << std::endl;
 
@@ -448,7 +448,7 @@ int main(int argc, char* argv[])
     {
         outFile1 << i * dt << "\t";
         
-        for (size_t j = 0; j < numSites; ++j) 
+        for(size_t j = 0; j < numSites; ++j) 
         {
             if(j < numSites-1) outFile1 << expectations[j][i] << "\t";
             else outFile1 << expectations[j][i] << std::endl;
@@ -459,7 +459,7 @@ int main(int argc, char* argv[])
 
     std::ofstream outFile2("VonNeumannEntropy_1DChain.txt");
     
-    if (!outFile2.is_open()) 
+    if(!outFile2.is_open()) 
     {
         std::cerr << "Error when creating VonNeumannEntropy file." << std::endl;
 
@@ -475,7 +475,7 @@ int main(int argc, char* argv[])
 
     std::ofstream outFile3("MutualInformation_1DChain.txt");
     
-    if (!outFile3.is_open()) 
+    if(!outFile3.is_open()) 
     {
         std::cerr << "Error when creating MutualInformation file." << std::endl;
 

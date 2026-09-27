@@ -54,14 +54,14 @@ int main(int argc, char* argv[])
 
     //QTensorNet::TensorNetwork::check_ = false;
 
-    size_t numSites = 10;
-    int64_t physExtent = 2;
-    int64_t maxVirtualExtent = 30;
+    size_t numSites = 10UL;
+    int64_t physExtent = 2L;
+    int64_t maxVirtualExtent = 30L;
     double absCutoff = 0.0;
-    double relCutoff = 1.0e-5;
-    size_t numThreads = 10;
+    double relCutoff = 1.0e-8;
+    size_t numThreads = 10UL;
 
-    size_t num_iter = 700;
+    size_t num_iter = 700UL;
     double dt = 10.0 / static_cast<double>(num_iter);
 
     QTensorNet::ThreadPool pool(numThreads);
@@ -131,7 +131,7 @@ int main(int argc, char* argv[])
     
     std::vector<std::vector<QTensorNet::complexType>> mpo_tensors_host;
 
-    for (size_t i = 0; i < numSites; ++i)
+    for(size_t i = 0; i < numSites; ++i)
     {
         std::vector<QTensorNet::complexType> data_host(unit_mpo.GetTensorSize(i), QTensorNet::complexType(0.0, 0.0));
 
@@ -162,7 +162,7 @@ int main(int argc, char* argv[])
 
     std::vector<std::vector<QTensorNet::complexType>> hamiltonian_mpo_tensors_host;
 
-    for (size_t i = 0; i < numSites; ++i)
+    for(size_t i = 0; i < numSites; ++i)
     {
         std::vector<QTensorNet::complexType> data_host(hamiltonian_mpo.GetTensorSize(i), QTensorNet::complexType(0.0, 0.0));
 
@@ -250,11 +250,8 @@ int main(int argc, char* argv[])
     std::vector<double> VonNeumannEntropy;
     std::vector<double> MutualInformation;
 
-    auto exp_negIh1dtper2_host = QTensorNet::BasisGates::UnitarySigmaI(hx * dt / 2.0, hy * dt / 2.0, hz * dt / 2.0);
-    void* exp_negIh1dtper2_device = QTensorNet::CuArrayMethods::VectorToGPUArray(exp_negIh1dtper2_host);
-
-    auto exp_negIh2dt_host = QTensorNet::BasisGates::UnitarySigmaISigmaJ(Jx * dt, Jy * dt, Jz * dt);
-    void* exp_negIh2dt_device = QTensorNet::CuArrayMethods::VectorToGPUArray(exp_negIh2dt_host);
+    auto exp_negIh1dt_host = QTensorNet::BasisGates::UnitarySigmaI(hx * dt, hy * dt, hz * dt);
+    void* exp_negIh1dt_device = QTensorNet::CuArrayMethods::VectorToGPUArray(exp_negIh1dt_host);
 
     auto exp_negIh2dtper2_host = QTensorNet::BasisGates::UnitarySigmaISigmaJ(Jx * dt / 2.0, Jy * dt / 2.0, Jz * dt / 2.0);
     void* exp_negIh2dtper2_device = QTensorNet::CuArrayMethods::VectorToGPUArray(exp_negIh2dtper2_host);
@@ -334,19 +331,20 @@ int main(int argc, char* argv[])
         }
     };
 
-    auto thread_func_exp_negIh1dtper2 = [&mps, exp_negIh1dtper2_device](size_t stream_num, size_t start, size_t end) 
+    auto thread_func_exp_negIh1dt = [&mps, exp_negIh1dt_device](size_t stream_num, size_t start, size_t end) 
     {
         for(size_t j = start; j < end; ++j)
         {            
             try
             {
-                std::vector<int32_t> exp_negIh1dtper2Modes = {mps.GetNode(j).physModes_[0], mps.GetNode(j).physModes_[0]};
-                std::vector<int64_t> exp_negIh1dtper2Extents = {2, 2};
+                std::vector<int32_t> Modes = {mps.GetNode(j).physModes_[0], 
+                                              mps.GetNode(j).physModes_[0]};
+                std::vector<int64_t> Extents = {2, 2};
 
                 mps.ApplySingleSiteGate(j, 
-                                        exp_negIh1dtper2_device, 
-                                        exp_negIh1dtper2Modes,  
-                                        exp_negIh1dtper2Extents,
+                                        exp_negIh1dt_device, 
+                                        Modes,  
+                                        Extents,
                                         stream_num);
             }
             catch(const std::exception& ex)
@@ -357,7 +355,7 @@ int main(int argc, char* argv[])
         }
     };
 
-    auto thread_func_exp_negIh2dtper2 = [&mps, exp_negIh2dtper2_device](size_t stream_num, size_t start, size_t end) 
+    auto thread_func_exp_negIh2dtper2_even = [&mps, exp_negIh2dtper2_device](size_t stream_num, size_t start, size_t end) 
     {
         for(size_t j = start; j < end; ++j)
         {
@@ -365,17 +363,17 @@ int main(int argc, char* argv[])
             
             try
             {
-                std::vector<int32_t> exp_negIh2dtper2Modes = {mps.GetNode(node).physModes_[0], 
-                                                              mps.GetNode(node+1).physModes_[0], 
-                                                              mps.GetNode(node).physModes_[0], 
-                                                              mps.GetNode(node+1).physModes_[0]};
-                std::vector<int64_t> exp_negIh2dtper2Extents = {2, 2, 2, 2};
+                std::vector<int32_t> Modes = {mps.GetNode(node).physModes_[0], 
+                                              mps.GetNode(node+1).physModes_[0], 
+                                              mps.GetNode(node).physModes_[0], 
+                                              mps.GetNode(node+1).physModes_[0]};
+                std::vector<int64_t> Extents = {2, 2, 2, 2};
 
                 mps.ApplyTwoSiteGate(node, 
                                      node + 1, 
                                      exp_negIh2dtper2_device, 
-                                     exp_negIh2dtper2Modes,
-                                     exp_negIh2dtper2Extents, 
+                                     Modes,
+                                     Extents, 
                                      stream_num);
             }
             catch(const std::exception& ex)
@@ -386,7 +384,7 @@ int main(int argc, char* argv[])
         }
     };
 
-    auto thread_func_exp_negIh2dt = [&mps, exp_negIh2dt_device](size_t stream_num, size_t start, size_t end) 
+    auto thread_func_exp_negIh2dtper2_odd = [&mps, exp_negIh2dtper2_device](size_t stream_num, size_t start, size_t end) 
     {
         for(size_t j = start; j < end; ++j)
         {
@@ -394,17 +392,17 @@ int main(int argc, char* argv[])
             
             try
             {
-                std::vector<int32_t> exp_negIh2dtModes = {mps.GetNode(node).physModes_[0], 
-                                                          mps.GetNode(node+1).physModes_[0], 
-                                                          mps.GetNode(node).physModes_[0], 
-                                                          mps.GetNode(node+1).physModes_[0]};
-                std::vector<int64_t> exp_negIh2dtExtents = {2, 2, 2, 2};
+                std::vector<int32_t> Modes = {mps.GetNode(node).physModes_[0], 
+                                              mps.GetNode(node+1).physModes_[0], 
+                                              mps.GetNode(node).physModes_[0], 
+                                              mps.GetNode(node+1).physModes_[0]};
+                std::vector<int64_t> Extents = {2, 2, 2, 2};
 
                 mps.ApplyTwoSiteGate(node, 
                                      node + 1, 
-                                     exp_negIh2dt_device, 
-                                     exp_negIh2dtModes, 
-                                     exp_negIh2dtExtents,
+                                     exp_negIh2dtper2_device, 
+                                     Modes, 
+                                     Extents,
                                      stream_num);
             }
             catch(const std::exception& ex)
@@ -443,15 +441,15 @@ int main(int argc, char* argv[])
     {
         std::cout << "Iteration: " << iter + 1UL << "/" << num_iter << "\r" << std::flush;
 
-        DoTask(pool, thread_func_exp_negIh1dtper2, numThreads, numSites);
+        DoTask(pool, thread_func_exp_negIh2dtper2_even, numThreads, numSites / 2UL);
 
-        DoTask(pool, thread_func_exp_negIh2dtper2, numThreads, numSites / 2UL);
+        DoTask(pool, thread_func_exp_negIh2dtper2_odd, numThreads, (numSites - 1UL) / 2UL);
 
-        DoTask(pool, thread_func_exp_negIh2dt, numThreads, (numSites - 1UL) / 2UL);
+        DoTask(pool, thread_func_exp_negIh1dt, numThreads, numSites);
 
-        DoTask(pool, thread_func_exp_negIh2dtper2, numThreads, numSites / 2UL);
+        DoTask(pool, thread_func_exp_negIh2dtper2_odd, numThreads, (numSites - 1UL) / 2UL);
 
-        DoTask(pool, thread_func_exp_negIh1dtper2, numThreads, numSites);
+        DoTask(pool, thread_func_exp_negIh2dtper2_even, numThreads, numSites / 2UL);
 
         auto [norm_device, descNorm] = mps.GetDensityMatrix();
         auto norm_host = QTensorNet::CuArrayMethods::GPUArrayToVector(norm_device, 1).at(0);
@@ -469,7 +467,7 @@ int main(int argc, char* argv[])
     
     std::ofstream outFile1("ExpectedSigmaZ_Local1DChain.txt");
     
-    if (!outFile1.is_open()) 
+    if(!outFile1.is_open()) 
     {
         std::cerr << "Error when creating expectations file." << std::endl;
 
@@ -480,7 +478,7 @@ int main(int argc, char* argv[])
     {
         outFile1 << i * dt << "\t";
         
-        for (size_t j = 0; j < numSites; ++j) 
+        for(size_t j = 0; j < numSites; ++j) 
         {
             if(j < numSites-1) outFile1 << expectations[j][i] << "\t";
             else outFile1 << expectations[j][i] << std::endl;
@@ -491,7 +489,7 @@ int main(int argc, char* argv[])
 
     std::ofstream outFile2("VonNeumannEntropy_Local1DChain.txt");
     
-    if (!outFile2.is_open()) 
+    if(!outFile2.is_open()) 
     {
         std::cerr << "Error when creating VonNeumannEntropy file." << std::endl;
 
@@ -507,7 +505,7 @@ int main(int argc, char* argv[])
 
     std::ofstream outFile3("MutualInformation_Local1DChain.txt");
     
-    if (!outFile3.is_open()) 
+    if(!outFile3.is_open()) 
     {
         std::cerr << "Error when creating MutualInformation file." << std::endl;
 
@@ -535,8 +533,7 @@ int main(int argc, char* argv[])
         std::exit(1);
     }
 
-    HANDLE_CUDA_ERROR(cudaFree(exp_negIh1dtper2_device));
-    HANDLE_CUDA_ERROR(cudaFree(exp_negIh2dt_device));
+    HANDLE_CUDA_ERROR(cudaFree(exp_negIh1dt_device));
     HANDLE_CUDA_ERROR(cudaFree(exp_negIh2dtper2_device));
     HANDLE_CUDA_ERROR(cudaFree(sigmaZ_device));
     

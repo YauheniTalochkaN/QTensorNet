@@ -166,7 +166,7 @@ int main(int argc, char* argv[])
 
         std::vector<std::vector<QTensorNet::complexType>> unitOp_tensors_host;
 
-        for (size_t i = 0UL; i < numSites; ++i)
+        for(size_t i = 0UL; i < numSites; ++i)
         {
             std::vector<QTensorNet::complexType> data_host(unitOp.GetTensorSize(i), QTensorNet::complexType(0.0, 0.0));
 
@@ -346,7 +346,7 @@ int main(int argc, char* argv[])
 
         std::ofstream outFile("ExpectedSigmaZ_3DChain.txt");
 
-        if (!outFile.is_open()) 
+        if(!outFile.is_open()) 
         {
             std::cerr << "Error when creating expectations file." << std::endl;
 
@@ -359,7 +359,7 @@ int main(int argc, char* argv[])
 
         outFile << 0.0 << "\t";
 
-        for (size_t j = 0UL; j < numSites; ++j) 
+        for(size_t j = 0UL; j < numSites; ++j) 
         {
             if(j < numSites-1) outFile << expectations[j][0] << "\t";
             else outFile << expectations[j][0] << std::endl;
@@ -395,7 +395,7 @@ int main(int argc, char* argv[])
 
             outFile << static_cast<double>(iter + 1UL) * dt << "\t";
 
-            for (size_t j = 0UL; j < numSites; ++j) 
+            for(size_t j = 0UL; j < numSites; ++j) 
             {
                 if(j < numSites-1) outFile << expectations[j][iter + 1UL] << "\t";
                 else outFile << expectations[j][iter + 1UL] << std::endl;

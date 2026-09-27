@@ -52,6 +52,7 @@ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Wno-deprecated-gpu-targets")
 
 file(GLOB sources ${PROJECT_SOURCE_DIR}/src/*.cc ${PROJECT_SOURCE_DIR}/src/*.cu)
 file(GLOB TEBD1D_source ${PROJECT_SOURCE_DIR}/TEBD1D.cc)
+file(GLOB TEBD2D_source ${PROJECT_SOURCE_DIR}/TEBD2D.cc)
 file(GLOB RK1D_source ${PROJECT_SOURCE_DIR}/RK1D.cc)
 file(GLOB TDVP3DSchrodingerComplete_source ${PROJECT_SOURCE_DIR}/TDVP3DSchrodingerComplete.cc)
 file(GLOB TDVP3DSchrodingerSquare_source ${PROJECT_SOURCE_DIR}/TDVP3DSchrodingerSquare.cc)
@@ -87,6 +88,12 @@ target_link_libraries(QTensorNet PUBLIC CUDA::cudart
 add_executable(TEBD1D ${TEBD1D_source})
 target_compile_features(TEBD1D PRIVATE cxx_std_20 cuda_std_20)
 target_link_libraries(TEBD1D PRIVATE QTensorNet)
+
+#----------------------------------------------------------------------------------------------------------------------
+
+add_executable(TEBD2D ${TEBD2D_source})
+target_compile_features(TEBD2D PRIVATE cxx_std_20 cuda_std_20)
+target_link_libraries(TEBD2D PRIVATE QTensorNet)
 
 #----------------------------------------------------------------------------------------------------------------------
 
@@ -126,7 +133,8 @@ target_link_libraries(DMRGHoneycomb PRIVATE QTensorNet)
 
 #----------------------------------------------------------------------------------------------------------------------
 
-install(TARGETS TEBD1D 
+install(TARGETS TEBD1D
+                TEBD2D 
                 RK1D 
                 TDVP3DSchrodingerComplete 
                 TDVP3DSchrodingerSquare
