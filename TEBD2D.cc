@@ -45,9 +45,9 @@ std::vector<std::tuple<size_t, size_t, size_t>> SquareLattice(size_t Nx, size_t 
 }
 
 void DoTask(QTensorNet::ThreadPool& pool, 
-            const std::function<void(const std::vector<std::pair<size_t, size_t>>&, size_t, size_t, size_t)>& task,
+            const std::function<void(const std::vector<std::pair<size_t, size_t>>&, size_t, size_t, size_t, size_t)>& task,
             const std::vector<std::pair<size_t, size_t>>& pairs, 
-            size_t stream_num, size_t num_sites)
+            size_t STstep, size_t stream_num, size_t num_sites)
 {
     size_t chunk_size = (num_sites + stream_num - 1) / stream_num;
 
@@ -60,7 +60,7 @@ void DoTask(QTensorNet::ThreadPool& pool,
 
         if(start < num_sites)
         {
-            futures.emplace_back(pool.AddTask(task, pairs, st, start, end));
+            futures.emplace_back(pool.AddTask(task, pairs, STstep, st, start, end));
         }
         else
         {
@@ -75,8 +75,8 @@ void DoTask(QTensorNet::ThreadPool& pool,
 };
 
 void DoTask(QTensorNet::ThreadPool& pool, 
-            const std::function<void(size_t, size_t, size_t)>& task, 
-            size_t stream_num, size_t num_sites)
+            const std::function<void(size_t, size_t, size_t, size_t)>& task, 
+            size_t STstep, size_t stream_num, size_t num_sites)
 {
     size_t chunk_size = (num_sites + stream_num - 1) / stream_num;
 
@@ -89,7 +89,7 @@ void DoTask(QTensorNet::ThreadPool& pool,
 
         if(start < num_sites)
         {
-            futures.emplace_back(pool.AddTask(task, st, start, end));
+            futures.emplace_back(pool.AddTask(task, STstep, st, start, end));
         }
         else
         {
@@ -127,7 +127,8 @@ int main(int argc, char* argv[])
     int64_t maxVirtualExtent = 6L;
     double absCutoff = 0.0;
     double relCutoff = 1.0e-8;
-    size_t workSpaceLimit = 20UL * 1024UL;
+    size_t workSpaceLimit = 50UL * 1024UL;
+    size_t STorder = 3UL;
 
     QTensorNet::CuTensorNetMethods::ContractionOptimizerAttributes optimizer_attributes = 
     {{CUTENSORNET_CONTRACTION_OPTIMIZER_CONFIG_HYPER_NUM_SAMPLES, 100},
@@ -209,18 +210,26 @@ int main(int argc, char* argv[])
 
     std::vector<std::vector<double>> expectations(numSites);
 
-    auto exp_negIzdt_host = QTensorNet::BasisGates::UnitarySigmaI(0.0, 0.0, hz * dt);
-    void* exp_negIzdt_device = QTensorNet::CuArrayMethods::VectorToGPUArray(exp_negIzdt_host);
+    auto pk_vec = QTensorNet::GetSuzukiCoeffs(STorder);
 
-    auto exp_negIxxdtper2_host = QTensorNet::BasisGates::UnitarySigmaISigmaJ(dt / 2.0, 0.0, 0.0);
-    void* exp_negIxxdtper2_device = QTensorNet::CuArrayMethods::VectorToGPUArray(exp_negIxxdtper2_host);
+    std::vector<void*> exp_negIzpkdt_device(pk_vec.size(), nullptr);
+    std::vector<void*> exp_negIxxpkdtper2_device(pk_vec.size(), nullptr);
+
+    for(size_t s = 0UL; s < pk_vec.size(); ++s)
+    {
+        exp_negIzpkdt_device[s] = QTensorNet::CuArrayMethods::VectorToGPUArray(
+            QTensorNet::BasisGates::UnitarySigmaI(0.0, 0.0, pk_vec[s] * hz * dt));
+
+        exp_negIxxpkdtper2_device[s] = QTensorNet::CuArrayMethods::VectorToGPUArray(
+            QTensorNet::BasisGates::UnitarySigmaISigmaJ(pk_vec[s] * dt / 2.0, 0.0, 0.0));
+    }
 
     auto sigmaZ_host = QTensorNet::BasisGates::SigmaZ();
     void* sigmaZ_device = QTensorNet::CuArrayMethods::VectorToGPUArray(sigmaZ_host);
 
-    auto thread_func_expectation_sigmaZ = [&peps, sigmaZ_device, &expectations, &optimizer_attributes](size_t stream_num, size_t start, size_t end) 
+    auto eval_expectation_sigmaZ_psi = [&peps, sigmaZ_device, &expectations, &optimizer_attributes, &numSites]() 
     {
-        for(size_t j = start; j < end; ++j)
+        for(size_t j = 0; j < numSites; ++j)
         {           
             QTensorNet::complexType expectationValue(0.0, 0.0);
             
@@ -234,7 +243,7 @@ int main(int argc, char* argv[])
                                                              sigmaZModes,  
                                                              sigmaZExtents,
                                                              nullptr,
-                                                             stream_num, 
+                                                             0UL, 
                                                              optimizer_attributes);
             }
             catch(const std::exception& ex)
@@ -247,7 +256,7 @@ int main(int argc, char* argv[])
         }
     };
 
-    auto thread_func_exp_negIzdt = [&peps, exp_negIzdt_device](size_t stream_num, size_t start, size_t end) 
+    auto thread_func_exp_negIzdt = [&peps, &exp_negIzpkdt_device](size_t STstep, size_t stream_num, size_t start, size_t end) 
     {
         for(size_t j = start; j < end; ++j)
         {            
@@ -258,7 +267,7 @@ int main(int argc, char* argv[])
                 std::vector<int64_t> Extents = {2, 2};
 
                 peps.ApplySingleSiteGate(j, 
-                                         exp_negIzdt_device, 
+                                         exp_negIzpkdt_device[STstep], 
                                          Modes,  
                                          Extents,
                                          stream_num);
@@ -271,8 +280,8 @@ int main(int argc, char* argv[])
         }
     };
 
-    auto thread_func_exp_negIhxxdtper2 = [&peps, exp_negIxxdtper2_device]
-    (const std::vector<std::pair<size_t, size_t>>& pairs, size_t stream_num, size_t start, size_t end) 
+    auto thread_func_exp_negIhxxdtper2 = [&peps, &exp_negIxxpkdtper2_device]
+    (const std::vector<std::pair<size_t, size_t>>& pairs, size_t STstep, size_t stream_num, size_t start, size_t end) 
     {
         for(size_t k = start; k < end; ++k)
         {
@@ -288,7 +297,7 @@ int main(int argc, char* argv[])
 
                 peps.ApplyTwoSiteGate(i, 
                                       j, 
-                                      exp_negIxxdtper2_device, 
+                                      exp_negIxxpkdtper2_device[STstep], 
                                       Modes,
                                       Extents, 
                                       stream_num);
@@ -316,7 +325,7 @@ int main(int argc, char* argv[])
 
     outFile << std::fixed << std::setprecision(10);
 
-    DoTask(pool,thread_func_expectation_sigmaZ, numThreads, numSites);
+    eval_expectation_sigmaZ_psi();
 
     outFile << 0.0 << "\t";
 
@@ -330,19 +339,22 @@ int main(int argc, char* argv[])
     {
         std::cout << "Iteration: " << iter + 1UL << "/" << num_iter << "\r" << std::flush;
 
-        DoTask(pool, thread_func_exp_negIhxxdtper2, hpairs[0], numThreads, hpairs[0].size());
-        DoTask(pool, thread_func_exp_negIhxxdtper2, hpairs[1], numThreads, hpairs[1].size());
+        for(size_t s = 0UL; s < pk_vec.size(); ++s)
+        {
+            DoTask(pool, thread_func_exp_negIhxxdtper2, hpairs[0], s, numThreads, hpairs[0].size());
+            DoTask(pool, thread_func_exp_negIhxxdtper2, hpairs[1], s, numThreads, hpairs[1].size());
 
-        DoTask(pool, thread_func_exp_negIhxxdtper2, vpairs[0], numThreads, vpairs[0].size());
-        DoTask(pool, thread_func_exp_negIhxxdtper2, vpairs[1], numThreads, vpairs[1].size());
+            DoTask(pool, thread_func_exp_negIhxxdtper2, vpairs[0], s, numThreads, vpairs[0].size());
+            DoTask(pool, thread_func_exp_negIhxxdtper2, vpairs[1], s, numThreads, vpairs[1].size());
 
-        DoTask(pool, thread_func_exp_negIzdt, numThreads, numSites);
+            DoTask(pool, thread_func_exp_negIzdt, s, numThreads, numSites);
 
-        DoTask(pool, thread_func_exp_negIhxxdtper2, vpairs[0], numThreads, vpairs[0].size());
-        DoTask(pool, thread_func_exp_negIhxxdtper2, vpairs[1], numThreads, vpairs[1].size());
+            DoTask(pool, thread_func_exp_negIhxxdtper2, vpairs[0], s, numThreads, vpairs[0].size());
+            DoTask(pool, thread_func_exp_negIhxxdtper2, vpairs[1], s, numThreads, vpairs[1].size());
 
-        DoTask(pool, thread_func_exp_negIhxxdtper2, hpairs[0], numThreads, hpairs[0].size());
-        DoTask(pool, thread_func_exp_negIhxxdtper2, hpairs[1], numThreads, hpairs[1].size());
+            DoTask(pool, thread_func_exp_negIhxxdtper2, hpairs[0], s, numThreads, hpairs[0].size());
+            DoTask(pool, thread_func_exp_negIhxxdtper2, hpairs[1], s, numThreads, hpairs[1].size());
+        }
 
         auto [norm_device, descNorm] = peps.GetDensityMatrix({}, true, 0UL, optimizer_attributes);
         auto norm_host = QTensorNet::CuArrayMethods::GPUArrayToVector(norm_device, 1).at(0);
@@ -351,7 +363,7 @@ int main(int argc, char* argv[])
 
         peps *= QTensorNet::complexType(1.0, 0.0) / std::sqrt(norm_host);
 
-        DoTask(pool, thread_func_expectation_sigmaZ, numThreads, numSites);
+        eval_expectation_sigmaZ_psi();
 
         outFile << static_cast<double>(iter + 1UL) * dt << "\t";
 
@@ -364,8 +376,16 @@ int main(int argc, char* argv[])
 
     outFile.close();
 
-    HANDLE_CUDA_ERROR(cudaFree(exp_negIzdt_device));
-    HANDLE_CUDA_ERROR(cudaFree(exp_negIxxdtper2_device));
+    for(auto it : exp_negIzpkdt_device)
+    {
+        HANDLE_CUDA_ERROR(cudaFree(it));
+    }
+    
+    for(auto it : exp_negIxxpkdtper2_device)
+    {
+        HANDLE_CUDA_ERROR(cudaFree(it));
+    }
+
     HANDLE_CUDA_ERROR(cudaFree(sigmaZ_device));
     
     auto finish = std::chrono::steady_clock::now();

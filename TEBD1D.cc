@@ -37,6 +37,35 @@ void DoTask(QTensorNet::ThreadPool& pool,
     }
 };
 
+void DoTask(QTensorNet::ThreadPool& pool, 
+            const std::function<void(size_t, size_t, size_t, size_t)>& task, 
+            size_t STstep, size_t stream_num, size_t num_sites)
+{
+    size_t chunk_size = (num_sites + stream_num - 1) / stream_num;
+
+    std::vector<std::future<void>> futures;
+
+    for(size_t st = 0; st < stream_num; ++st)
+    {
+        size_t start = st * chunk_size;
+        size_t end = std::min(start + chunk_size, num_sites);
+
+        if(start < num_sites)
+        {
+            futures.emplace_back(pool.AddTask(task, STstep, st, start, end));
+        }
+        else
+        {
+            break;
+        }
+    }
+
+    for(auto& future : futures)
+    {
+        future.get();
+    }
+};
+
 int main(int argc, char* argv[])
 {
     auto start = std::chrono::steady_clock::now();
@@ -60,8 +89,9 @@ int main(int argc, char* argv[])
     double absCutoff = 0.0;
     double relCutoff = 1.0e-8;
     size_t numThreads = 10UL;
+    size_t STorder = 3UL;
 
-    size_t num_iter = 700UL;
+    size_t num_iter = 500UL;
     double dt = 10.0 / static_cast<double>(num_iter);
 
     QTensorNet::ThreadPool pool(numThreads);
@@ -115,7 +145,6 @@ int main(int argc, char* argv[])
     {
         mps.SetState(mps_tensors_host);
         mps.SetSVDConfig(absCutoff, relCutoff);
-        //mps.SetGlobalMode(true); // numThreads must be 1
     }
     catch(const std::exception& ex)
     {
@@ -123,138 +152,25 @@ int main(int argc, char* argv[])
         std::exit(1);
     } 
 
-    //---Unit operator-------------------------------------------------------------------
-
-    std::vector<std::vector<int64_t>> physExtentsOp(numSites, std::vector<int64_t>{physExtent, physExtent});
-
-    QTensorNet::TensorNetwork unit_mpo(physExtentsOp, graph, root, maxVirtualExtent, numThreads);
-    
-    std::vector<std::vector<QTensorNet::complexType>> mpo_tensors_host;
-
-    for(size_t i = 0; i < numSites; ++i)
-    {
-        std::vector<QTensorNet::complexType> data_host(unit_mpo.GetTensorSize(i), QTensorNet::complexType(0.0, 0.0));
-
-        data_host[0] = QTensorNet::complexType(1.0, 0.0);
-        data_host[3] = QTensorNet::complexType(1.0, 0.0);
-
-        mpo_tensors_host.push_back(data_host);
-    }
-
-    try
-    {
-        unit_mpo.SetState(mpo_tensors_host);
-        unit_mpo.SetSVDConfig(absCutoff, relCutoff);
-    }
-    catch(const std::exception& ex)
-    {
-        std::cerr << ex.what() << std::endl;
-        std::exit(1);
-    }
-
-    //---Hamiltonian-------------------------------------------------------------------
-
-    std::cout << "\nBuilding Hamiltonian TN..." << std::endl;
-
-    auto startH = std::chrono::steady_clock::now();
-
-    QTensorNet::TensorNetwork hamiltonian_mpo(physExtentsOp, graph, root, maxVirtualExtent, numThreads);
-
-    std::vector<std::vector<QTensorNet::complexType>> hamiltonian_mpo_tensors_host;
-
-    for(size_t i = 0; i < numSites; ++i)
-    {
-        std::vector<QTensorNet::complexType> data_host(hamiltonian_mpo.GetTensorSize(i), QTensorNet::complexType(0.0, 0.0));
-
-        hamiltonian_mpo_tensors_host.push_back(data_host);
-    }
-
-    try
-    {
-        hamiltonian_mpo.SetState(hamiltonian_mpo_tensors_host);
-        hamiltonian_mpo.SetSVDConfig(absCutoff, relCutoff);
-    }
-    catch(const std::exception& ex)
-    {
-        std::cerr << ex.what() << std::endl;
-        std::exit(1);
-    }
-    
-    auto sigmasum_host = QTensorNet::BasisGates::SigmaSum(hx, hy, hz);
-    void* sigmasum_device = QTensorNet::CuArrayMethods::VectorToGPUArray(sigmasum_host);
-
-    auto sigmaIsigmaJsum_host = QTensorNet::BasisGates::SigmaISigmaJSum(Jx, Jy, Jz);
-    void* sigmaIsigmaJsum_device = QTensorNet::CuArrayMethods::VectorToGPUArray(sigmaIsigmaJsum_host);
-
-    for(size_t j = 0; j < numSites; ++j)
-    {
-        QTensorNet::TensorNetwork local_unit_mpo(unit_mpo);
-        
-        try
-        {
-            std::vector<int32_t> sigmasumModes = {local_unit_mpo.GetNode(j).physModes_[1], 
-                                                  local_unit_mpo.GetNode(j).physModes_[1]};
-            std::vector<int64_t> sigmasumExtents = {2, 2};
-
-            local_unit_mpo.ApplySingleSiteGate(j, 
-                                               sigmasum_device, 
-                                               sigmasumModes,  
-                                               sigmasumExtents);
-
-            hamiltonian_mpo += local_unit_mpo;
-        }
-        catch(const std::exception& ex)
-        {
-            std::cerr << ex.what() << std::endl;
-            std::exit(1);
-        }
-    }
-
-    for(size_t j = 0; j < numSites-1; ++j)
-    {        
-        QTensorNet::TensorNetwork local_unit_mpo(unit_mpo);
-        
-        try
-        {
-            std::vector<int32_t> sigmaIsigmaJsumModes = {local_unit_mpo.GetNode(j).physModes_[1], 
-                                                         local_unit_mpo.GetNode(j + 1UL).physModes_[1], 
-                                                         local_unit_mpo.GetNode(j).physModes_[1], 
-                                                         local_unit_mpo.GetNode(j + 1UL).physModes_[1]};
-            std::vector<int64_t> sigmaIsigmaJsumExtents = {2, 2, 2, 2};
-
-            local_unit_mpo.ApplyTwoSiteGate(j, 
-                                            j + 1UL, 
-                                            sigmaIsigmaJsum_device, 
-                                            sigmaIsigmaJsumModes, 
-                                            sigmaIsigmaJsumExtents);
-            
-            hamiltonian_mpo += local_unit_mpo;
-        }
-        catch(const std::exception& ex)
-        {
-            std::cerr << ex.what() << std::endl;
-            std::exit(1);
-        }
-    }
-
-    HANDLE_CUDA_ERROR(cudaFree(sigmasum_device));
-    HANDLE_CUDA_ERROR(cudaFree(sigmaIsigmaJsum_device));
-
-    auto finishH = std::chrono::steady_clock::now();
-    std::chrono::duration<double> elapsedH = finishH - startH;
-    std::cout << "\nTotal spent time for Hamiltonian building: " << elapsedH.count() << " s." << std::endl;
-
     //---lambda functions--------------------------------------------------------------
 
     std::vector<std::vector<double>> expectations(numSites);
     std::vector<double> VonNeumannEntropy;
     std::vector<double> MutualInformation;
 
-    auto exp_negIh1dt_host = QTensorNet::BasisGates::UnitarySigmaI(hx * dt, hy * dt, hz * dt);
-    void* exp_negIh1dt_device = QTensorNet::CuArrayMethods::VectorToGPUArray(exp_negIh1dt_host);
+    auto pk_vec = QTensorNet::GetSuzukiCoeffs(STorder);
 
-    auto exp_negIh2dtper2_host = QTensorNet::BasisGates::UnitarySigmaISigmaJ(Jx * dt / 2.0, Jy * dt / 2.0, Jz * dt / 2.0);
-    void* exp_negIh2dtper2_device = QTensorNet::CuArrayMethods::VectorToGPUArray(exp_negIh2dtper2_host);
+    std::vector<void*> exp_negIh1pkdt_device(pk_vec.size(), nullptr);
+    std::vector<void*> exp_negIh2pkdtper2_device(pk_vec.size(), nullptr);
+
+    for(size_t s = 0UL; s < pk_vec.size(); ++s)
+    {
+        exp_negIh1pkdt_device[s] = QTensorNet::CuArrayMethods::VectorToGPUArray(
+            QTensorNet::BasisGates::UnitarySigmaI(pk_vec[s] * hx * dt, pk_vec[s] * hy * dt, pk_vec[s] * hz * dt));
+
+        exp_negIh2pkdtper2_device[s] = QTensorNet::CuArrayMethods::VectorToGPUArray(
+            QTensorNet::BasisGates::UnitarySigmaISigmaJ(pk_vec[s] * Jx * dt / 2.0, pk_vec[s] * Jy * dt / 2.0, pk_vec[s] * Jz * dt / 2.0));
+    }
 
     auto sigmaZ_host = QTensorNet::BasisGates::SigmaZ();
     void* sigmaZ_device = QTensorNet::CuArrayMethods::VectorToGPUArray(sigmaZ_host);
@@ -331,7 +247,7 @@ int main(int argc, char* argv[])
         }
     };
 
-    auto thread_func_exp_negIh1dt = [&mps, exp_negIh1dt_device](size_t stream_num, size_t start, size_t end) 
+    auto thread_func_exp_negIh1dt = [&mps, &exp_negIh1pkdt_device](size_t STstep, size_t stream_num, size_t start, size_t end) 
     {
         for(size_t j = start; j < end; ++j)
         {            
@@ -342,7 +258,7 @@ int main(int argc, char* argv[])
                 std::vector<int64_t> Extents = {2, 2};
 
                 mps.ApplySingleSiteGate(j, 
-                                        exp_negIh1dt_device, 
+                                        exp_negIh1pkdt_device[STstep], 
                                         Modes,  
                                         Extents,
                                         stream_num);
@@ -355,7 +271,7 @@ int main(int argc, char* argv[])
         }
     };
 
-    auto thread_func_exp_negIh2dtper2_even = [&mps, exp_negIh2dtper2_device](size_t stream_num, size_t start, size_t end) 
+    auto thread_func_exp_negIh2dtper2_even = [&mps, &exp_negIh2pkdtper2_device](size_t STstep, size_t stream_num, size_t start, size_t end) 
     {
         for(size_t j = start; j < end; ++j)
         {
@@ -371,7 +287,7 @@ int main(int argc, char* argv[])
 
                 mps.ApplyTwoSiteGate(node, 
                                      node + 1, 
-                                     exp_negIh2dtper2_device, 
+                                     exp_negIh2pkdtper2_device[STstep], 
                                      Modes,
                                      Extents, 
                                      stream_num);
@@ -384,7 +300,7 @@ int main(int argc, char* argv[])
         }
     };
 
-    auto thread_func_exp_negIh2dtper2_odd = [&mps, exp_negIh2dtper2_device](size_t stream_num, size_t start, size_t end) 
+    auto thread_func_exp_negIh2dtper2_odd = [&mps, &exp_negIh2pkdtper2_device](size_t STstep, size_t stream_num, size_t start, size_t end) 
     {
         for(size_t j = start; j < end; ++j)
         {
@@ -400,7 +316,7 @@ int main(int argc, char* argv[])
 
                 mps.ApplyTwoSiteGate(node, 
                                      node + 1, 
-                                     exp_negIh2dtper2_device, 
+                                     exp_negIh2pkdtper2_device[STstep], 
                                      Modes, 
                                      Extents,
                                      stream_num);
@@ -415,41 +331,28 @@ int main(int argc, char* argv[])
 
     //---------------------------------------------------------------------------------
 
-    std::cout << "\nCalculating the energy of the spin net at the initial MPS state vector..." << std::endl;
+    std::cout << "\nApplying unitary evolution operator and obtaining physical entities..." << std::endl;
 
-    try
-    {     
-        QTensorNet::complexType energy = mps.ComputeMatrixElement(&hamiltonian_mpo);
-
-        std::cout << "Energy of the system: " << energy << std::endl;
-    }
-    catch(const std::exception& ex)
-    {
-        std::cerr << ex.what() << std::endl;
-        std::exit(1);
-    }
-
-    DoTask(pool,thread_func_expectation_sigmaZ, numThreads, numSites);
+    DoTask(pool, thread_func_expectation_sigmaZ, numThreads, numSites);
 
     calculate_entropy();
 
     calculate_mutual_information();
 
-    std::cout << "\nApplying unitary evolution operator and obtaining physical entities..." << std::endl;
-
     for(size_t iter = 0; iter < num_iter; ++iter)
     {
         std::cout << "Iteration: " << iter + 1UL << "/" << num_iter << "\r" << std::flush;
 
-        DoTask(pool, thread_func_exp_negIh2dtper2_even, numThreads, numSites / 2UL);
+        for(size_t s = 0UL; s < pk_vec.size(); ++s)
+        {
+            DoTask(pool, thread_func_exp_negIh2dtper2_even, s, numThreads, numSites / 2UL);
+            DoTask(pool, thread_func_exp_negIh2dtper2_odd, s, numThreads, (numSites - 1UL) / 2UL);
 
-        DoTask(pool, thread_func_exp_negIh2dtper2_odd, numThreads, (numSites - 1UL) / 2UL);
+            DoTask(pool, thread_func_exp_negIh1dt, s, numThreads, numSites);
 
-        DoTask(pool, thread_func_exp_negIh1dt, numThreads, numSites);
-
-        DoTask(pool, thread_func_exp_negIh2dtper2_odd, numThreads, (numSites - 1UL) / 2UL);
-
-        DoTask(pool, thread_func_exp_negIh2dtper2_even, numThreads, numSites / 2UL);
+            DoTask(pool, thread_func_exp_negIh2dtper2_odd, s, numThreads, (numSites - 1UL) / 2UL);
+            DoTask(pool, thread_func_exp_negIh2dtper2_even, s, numThreads, numSites / 2UL);
+        }
 
         auto [norm_device, descNorm] = mps.GetDensityMatrix();
         auto norm_host = QTensorNet::CuArrayMethods::GPUArrayToVector(norm_device, 1).at(0);
@@ -519,22 +422,16 @@ int main(int argc, char* argv[])
 
     outFile3.close();
 
-    std::cout << "\n\nCalculating the energy of the spin net at the final MPS state vector..." << std::endl;
-
-    try
-    {            
-        QTensorNet::complexType energy = mps.ComputeMatrixElement(&hamiltonian_mpo);
-
-        std::cout << "Energy of the system: " << energy << std::endl;
-    }
-    catch(const std::exception& ex)
+    for(auto it : exp_negIh1pkdt_device)
     {
-        std::cerr << ex.what() << std::endl;
-        std::exit(1);
+        HANDLE_CUDA_ERROR(cudaFree(it));
+    }
+    
+    for(auto it : exp_negIh2pkdtper2_device)
+    {
+        HANDLE_CUDA_ERROR(cudaFree(it));
     }
 
-    HANDLE_CUDA_ERROR(cudaFree(exp_negIh1dt_device));
-    HANDLE_CUDA_ERROR(cudaFree(exp_negIh2dtper2_device));
     HANDLE_CUDA_ERROR(cudaFree(sigmaZ_device));
     
     auto finish = std::chrono::steady_clock::now();
