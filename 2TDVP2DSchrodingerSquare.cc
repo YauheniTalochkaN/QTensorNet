@@ -201,11 +201,8 @@ int main(int argc, char* argv[])
             std::exit(1);
         }
     
+        H_terms.clear();
         H_tensors_host.clear();
-
-        hamiltonian.Save("./hamiltonian");
-
-        //QTensorNet::TensorNetwork hamiltonian("./hamiltonian");
 
         auto finishH = std::chrono::steady_clock::now();
         std::chrono::duration<double> elapsedH = finishH - startH;
