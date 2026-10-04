@@ -149,15 +149,6 @@ int main(int argc, char* argv[])
             std::exit(1);
         } 
 
-        //QTensorNet::TensorNetwork rho("./rho");
-
-        std::vector<QTensorNet::complexType> rhoC0_host = {QTensorNet::complexType(0.0, 0.0),
-                                                           QTensorNet::complexType(0.0, 0.0),
-                                                           QTensorNet::complexType(0.0, 0.0),
-                                                           QTensorNet::complexType(1.0, 0.0)};
-
-        void* rhoC0_device = QTensorNet::CuArrayMethods::VectorToGPUArray(rhoC0_host);
-
         //---Unit operator-------------------------------------------------------------------
 
         std::vector<std::vector<int64_t>> physExtentsOp(numSites, std::vector<int64_t>{physExtent, physExtent});
@@ -421,7 +412,6 @@ int main(int argc, char* argv[])
         }
         
         HANDLE_CUDA_ERROR(cudaFree(Sz_device));
-        HANDLE_CUDA_ERROR(cudaFree(rhoC0_device));
 
         delete Liouvillian;
 
