@@ -4,7 +4,7 @@ namespace QTensorNet
 {    
     std::vector<double> GetSuzukiCoeffs(size_t k) 
     {
-        if (k <= 1UL) 
+        if(k <= 1UL) 
         {
             return {1.0};
         }
@@ -18,7 +18,7 @@ namespace QTensorNet
 
         auto append_scaled = [&](double scale) 
         {
-            for (double p : previous) 
+            for(double p : previous) 
             {
                 current.push_back(p * scale);
             }
@@ -67,10 +67,8 @@ namespace QTensorNet
                 }
 
                 if(!visitedNodes[v]) 
-                {
-                    bool answer = dfs(v, u);
-                    
-                    if(answer)
+                {                    
+                    if(dfs(v, u))
                     {
                         loop = true;
                         break;
@@ -2419,6 +2417,11 @@ namespace QTensorNet
                 throw std::runtime_error("TensorNetwork::ApplyTwoSiteGate: "
                                          "The operator modes and the site modes do not match.");
             }
+        }
+
+        if(globalMode_ && loopFree_)
+        {
+            OrthogonalizeAround(siteA, std::numeric_limits<size_t>::max(), stream_num);
         }
 
         modesInAB[2] = operatorModes;

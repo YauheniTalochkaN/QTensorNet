@@ -52,10 +52,10 @@ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Wno-deprecated-gpu-targets")
 
 file(GLOB sources ${PROJECT_SOURCE_DIR}/src/*.cc ${PROJECT_SOURCE_DIR}/src/*.cu)
 file(GLOB TEBD1D_source ${PROJECT_SOURCE_DIR}/TEBD1D.cc)
-file(GLOB TEBD2D_source ${PROJECT_SOURCE_DIR}/TEBD2D.cc)
 file(GLOB RK1D_source ${PROJECT_SOURCE_DIR}/RK1D.cc)
+file(GLOB 1TDVP2DSchrodingerSquare_source ${PROJECT_SOURCE_DIR}/1TDVP2DSchrodingerSquare.cc)
+file(GLOB 2TDVP2DSchrodingerSquare_source ${PROJECT_SOURCE_DIR}/2TDVP2DSchrodingerSquare.cc)
 file(GLOB TDVP3DSchrodingerComplete_source ${PROJECT_SOURCE_DIR}/TDVP3DSchrodingerComplete.cc)
-file(GLOB TDVP3DSchrodingerSquare_source ${PROJECT_SOURCE_DIR}/TDVP3DSchrodingerSquare.cc)
 file(GLOB TDVP3DvonNeumann_source ${PROJECT_SOURCE_DIR}/TDVP3DvonNeumann.cc)
 file(GLOB DMRGSquareKagome_source ${PROJECT_SOURCE_DIR}/DMRGSquareKagome.cc)
 file(GLOB DMRGHoneycomb_source ${PROJECT_SOURCE_DIR}/DMRGHoneycomb.cc)
@@ -91,27 +91,27 @@ target_link_libraries(TEBD1D PRIVATE QTensorNet)
 
 #----------------------------------------------------------------------------------------------------------------------
 
-add_executable(TEBD2D ${TEBD2D_source})
-target_compile_features(TEBD2D PRIVATE cxx_std_20 cuda_std_20)
-target_link_libraries(TEBD2D PRIVATE QTensorNet)
-
-#----------------------------------------------------------------------------------------------------------------------
-
 add_executable(RK1D ${RK1D_source})
 target_compile_features(RK1D PRIVATE cxx_std_20 cuda_std_20)
 target_link_libraries(RK1D PRIVATE QTensorNet)
 
 #----------------------------------------------------------------------------------------------------------------------
 
-add_executable(TDVP3DSchrodingerComplete ${TDVP3DSchrodingerComplete_source})
-target_compile_features(TDVP3DSchrodingerComplete PRIVATE cxx_std_20 cuda_std_20)
-target_link_libraries(TDVP3DSchrodingerComplete PRIVATE QTensorNet)
+add_executable(1TDVP2DSchrodingerSquare ${1TDVP2DSchrodingerSquare_source})
+target_compile_features(1TDVP2DSchrodingerSquare PRIVATE cxx_std_20 cuda_std_20)
+target_link_libraries(1TDVP2DSchrodingerSquare PRIVATE QTensorNet)
 
 #----------------------------------------------------------------------------------------------------------------------
 
-add_executable(TDVP3DSchrodingerSquare ${TDVP3DSchrodingerSquare_source})
-target_compile_features(TDVP3DSchrodingerSquare PRIVATE cxx_std_20 cuda_std_20)
-target_link_libraries(TDVP3DSchrodingerSquare PRIVATE QTensorNet)
+add_executable(2TDVP2DSchrodingerSquare ${2TDVP2DSchrodingerSquare_source})
+target_compile_features(2TDVP2DSchrodingerSquare PRIVATE cxx_std_20 cuda_std_20)
+target_link_libraries(2TDVP2DSchrodingerSquare PRIVATE QTensorNet)
+
+#----------------------------------------------------------------------------------------------------------------------
+
+add_executable(TDVP3DSchrodingerComplete ${TDVP3DSchrodingerComplete_source})
+target_compile_features(TDVP3DSchrodingerComplete PRIVATE cxx_std_20 cuda_std_20)
+target_link_libraries(TDVP3DSchrodingerComplete PRIVATE QTensorNet)
 
 #----------------------------------------------------------------------------------------------------------------------
 
@@ -134,10 +134,10 @@ target_link_libraries(DMRGHoneycomb PRIVATE QTensorNet)
 #----------------------------------------------------------------------------------------------------------------------
 
 install(TARGETS TEBD1D
-                TEBD2D 
                 RK1D 
+                1TDVP2DSchrodingerSquare
+                2TDVP2DSchrodingerSquare
                 TDVP3DSchrodingerComplete 
-                TDVP3DSchrodingerSquare
                 TDVP3DvonNeumann 
                 DMRGSquareKagome 
                 DMRGHoneycomb
