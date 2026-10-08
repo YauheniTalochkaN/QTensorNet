@@ -93,8 +93,8 @@ int main(int argc, char* argv[])
         QTensorNet::ThreadPool pool(num_threads);
 
         QTensorNet::CuTensorNetMethods::ContractionOptimizerAttributes optimizer_attributes = 
-        {{CUTENSORNET_CONTRACTION_OPTIMIZER_CONFIG_HYPER_NUM_SAMPLES, 1000},
-         {CUTENSORNET_CONTRACTION_OPTIMIZER_CONFIG_RECONFIG_NUM_ITERATIONS, 10000}};
+        {{CUTENSORNET_CONTRACTION_OPTIMIZER_CONFIG_HYPER_NUM_SAMPLES, 100},
+         {CUTENSORNET_CONTRACTION_OPTIMIZER_CONFIG_RECONFIG_NUM_ITERATIONS, 5000}};
 
         std::vector<size_t> max_virtual_extents = {20UL, 20UL, 
                                                    30UL, 30UL, 
@@ -102,13 +102,13 @@ int main(int argc, char* argv[])
                                                    100UL, 100UL, 
                                                    200UL, 200UL, 
                                                    400UL, 400UL,
-                                                   600UL, 600UL};
+                                                   800UL, 800UL};
     
         size_t rootTTS = 54UL;
         size_t rootTTO = 54UL;
 
         QTensorNet::complexType J(-1.0, 0.0);
-        QTensorNet::complexType dJ(-0.9, 0.0);
+        QTensorNet::complexType dJ(-1.0, 0.0);
 
         std::vector<double> phi_list = {2.0 * M_PI / 3.0, -2.0 * M_PI / 3.0, 0.0};
 

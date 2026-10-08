@@ -49,7 +49,7 @@ namespace QTensorNet
             lmodes_[i] = modes;
             lextents_[i] = extents;
 
-            if (data != ltensors_[i].get()) 
+            if(data != ltensors_[i].get()) 
             {
                 ltensors_[i] = std::shared_ptr<void>(data, deleter);
             }

@@ -204,8 +204,9 @@ namespace QTensorNet
                                                             const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes = CuTensorNetMethods::optimalContractionOptimizerAttributes) const;
         std::pair<std::vector<const void*>, TensorNetDescriptor> EvaluateTensorNetDescriptorOfEffectiveOperator(const TensorNetwork* Omega,
                                                                                                                 CachedLeaves& cache,
+                                                                                                                const std::vector<size_t>& keep_nodes,
                                                                                                                 const TensorNetwork* ConjPsi = nullptr,
-                                                                                                                const std::vector<size_t>& keep_nodes = {},
+                                                                                                                bool middle = false,
                                                                                                                 size_t stream_num = 0UL,
                                                                                                                 const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes = CuTensorNetMethods::optimalContractionOptimizerAttributes);
         complexType FindGroundStateUsingDMRG(TensorNetwork* Psi,

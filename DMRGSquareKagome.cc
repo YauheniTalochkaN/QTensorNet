@@ -144,8 +144,8 @@ int main(int argc, char* argv[])
         QTensorNet::ThreadPool pool(num_threads);
 
         QTensorNet::CuTensorNetMethods::ContractionOptimizerAttributes optimizer_attributes = 
-        {{CUTENSORNET_CONTRACTION_OPTIMIZER_CONFIG_HYPER_NUM_SAMPLES, 1000},
-         {CUTENSORNET_CONTRACTION_OPTIMIZER_CONFIG_RECONFIG_NUM_ITERATIONS, 10000}};
+        {{CUTENSORNET_CONTRACTION_OPTIMIZER_CONFIG_HYPER_NUM_SAMPLES, 100},
+         {CUTENSORNET_CONTRACTION_OPTIMIZER_CONFIG_RECONFIG_NUM_ITERATIONS, 5000}};
 
         std::vector<size_t> max_virtual_extents = {20UL, 20UL, 
                                                    30UL, 30UL, 

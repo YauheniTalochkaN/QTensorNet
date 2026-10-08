@@ -4733,8 +4733,9 @@ namespace QTensorNet
 
     std::pair<std::vector<const void*>, TensorNetDescriptor> TensorNetwork::EvaluateTensorNetDescriptorOfEffectiveOperator(const TensorNetwork* Omega,
                                                                                                                            CachedLeaves& cache,
-                                                                                                                           const TensorNetwork* ConjPsi,
                                                                                                                            const std::vector<size_t>& keep_nodes,
+                                                                                                                           const TensorNetwork* ConjPsi,
+                                                                                                                           bool middle,
                                                                                                                            size_t stream_num,
                                                                                                                            const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes)
     {
@@ -4838,10 +4839,71 @@ namespace QTensorNet
             }
         }
 
+        size_t Psi_bond_indexA, Psi_bond_indexB;
+        size_t ConjPsi_bond_indexA, ConjPsi_bond_indexB;
+        
+        if(middle)
+        {
+            if(check_)
+            {
+                if(keep_nodes.size() != 2UL)
+                {
+                    throw std::runtime_error("TensorNetwork::EvaluateTensorNetDescriptorOfEffectiveOperator: "
+                                             "keep_nodes must hold two sites when middle option is true.");
+                }
+            }
+
+            auto& Psi_siteA_node = nodes_[keep_nodes[0]];
+            auto& Psi_siteB_node = nodes_[keep_nodes[1]];
+
+            auto Psi_itA = Psi_siteA_node.neighbors_.find(keep_nodes[1]);
+            auto Psi_itB = Psi_siteB_node.neighbors_.find(keep_nodes[0]);
+
+            if(check_)
+            {
+                if((Psi_itA == Psi_siteA_node.neighbors_.end()) || (Psi_itB == Psi_siteB_node.neighbors_.end()))
+                {
+                    throw std::invalid_argument("TensorNetwork::EvaluateTensorNetDescriptorOfEffectiveOperator: "
+                                                 "Site " + std::to_string(keep_nodes[0]) + " must be a neighbor of site " 
+                                                 + std::to_string(keep_nodes[1]) + ".");
+                }
+            }
+
+            Psi_bond_indexA = Psi_itA->second;
+            Psi_bond_indexB = Psi_itB->second;
+
+            if(ConjPsi != nullptr)
+            {
+                auto& ConjPsi_siteA_node = ConjPsi->nodes_[keep_nodes[0]];
+                auto& ConjPsi_siteB_node = ConjPsi->nodes_[keep_nodes[1]];
+
+                auto ConjPsi_itA = ConjPsi_siteA_node.neighbors_.find(keep_nodes[1]);
+                auto ConjPsi_itB = ConjPsi_siteB_node.neighbors_.find(keep_nodes[0]);
+
+                if(check_)
+                {
+                    if((ConjPsi_itA == ConjPsi_siteA_node.neighbors_.end()) || (ConjPsi_itB == ConjPsi_siteB_node.neighbors_.end()))
+                    {
+                        throw std::invalid_argument("TensorNetwork::EvaluateTensorNetDescriptorOfEffectiveOperator: "
+                                                     "Site " + std::to_string(keep_nodes[0]) + " must be a neighbor of site " 
+                                                     + std::to_string(keep_nodes[1]) + " for ConjPsi TN.");
+                    }
+                }
+
+                ConjPsi_bond_indexA = ConjPsi_itA->second;
+                ConjPsi_bond_indexB = ConjPsi_itB->second;
+            }
+            else
+            {
+                ConjPsi_bond_indexA = Psi_bond_indexA;
+                ConjPsi_bond_indexB = Psi_bond_indexB;
+            }
+        }
+
         int32_t currentMode = nextMode_;
         int32_t currentConjPsiMode = (ConjPsi == nullptr) ? nextMode_ : ConjPsi->nextMode_;
 
-        const size_t numkeepNodes = keep_nodes.size();
+        const size_t numkeepNodes = middle ? 0UL : keep_nodes.size();
         const size_t numprocessingNodes = numSites_ - numkeepNodes;
 
         const size_t numInputTensors = 3UL * numSites_ - 2UL * numkeepNodes + 1UL;
@@ -4852,16 +4914,34 @@ namespace QTensorNet
         std::vector<std::vector<int32_t>> ConjPsiphysModes(numSites_);
 
         std::vector<size_t> processing_nodes;
-        processing_nodes.reserve(numprocessingNodes);
 
-        for(size_t i = 0; i < numSites_; ++i)
+        if(middle)
         {
-            auto it = std::find(keep_nodes.begin(), keep_nodes.end(), i);
+            processing_nodes.resize(numprocessingNodes);
+            
+            std::iota(processing_nodes.begin(), processing_nodes.end(), 0UL);
+        }
+        else
+        {
+            processing_nodes.reserve(numprocessingNodes);
 
-            if(it == keep_nodes.end())
+            for(size_t i = 0; i < numSites_; ++i)
             {
-                processing_nodes.push_back(i);
+                auto it = std::find(keep_nodes.begin(), keep_nodes.end(), i);
+
+                if(it == keep_nodes.end())
+                {
+                    processing_nodes.push_back(i);
+                }
             }
+        }
+
+        std::vector<int32_t> Psi_extra_virtualModes, ConjPsi_extra_virtualModes;
+
+        if(middle)
+        {
+            Psi_extra_virtualModes = {currentMode++, currentMode++};
+            ConjPsi_extra_virtualModes = {currentConjPsiMode++, currentConjPsiMode++};
         }
 
         std::vector<const void*> tensorsIn(numInputTensors);
@@ -4875,6 +4955,19 @@ namespace QTensorNet
             {
                 modesIn[j] = GetTensorModes(i, false);
                 extentsIn[j] = GetTensorExtents(i, false);
+
+                if(middle)
+                {
+                    if(i == keep_nodes[0])
+                    {
+                        modesIn[j][nodes_[i].physModes_.size() + Psi_bond_indexA] = Psi_extra_virtualModes[0];
+                    }
+
+                    if(i == keep_nodes[1])
+                    {
+                        modesIn[j][nodes_[i].physModes_.size() + Psi_bond_indexB] = Psi_extra_virtualModes[1];
+                    }
+                }
                 
                 tensorsIn[j] = tensors_[i];
 
@@ -4915,6 +5008,20 @@ namespace QTensorNet
                 std::vector<int32_t> conjpsi_modes_j = ConjPsiphysModes[j];
 
                 std::vector<int32_t> conjpsi_virtualModes_j = (ConjPsi == nullptr) ? nodes_[i].virtualModes_ : ConjPsi->nodes_[i].virtualModes_;
+
+                if(middle)
+                {
+                    if(i == keep_nodes[0])
+                    {
+                        conjpsi_virtualModes_j[ConjPsi_bond_indexA] = ConjPsi_extra_virtualModes[0];
+                    }
+
+                    if(i == keep_nodes[1])
+                    {
+                        conjpsi_virtualModes_j[ConjPsi_bond_indexB] = ConjPsi_extra_virtualModes[1];
+                    }
+                }
+
                 std::transform(conjpsi_virtualModes_j.begin(), conjpsi_virtualModes_j.end(), conjpsi_virtualModes_j.begin(), 
                               [&currentMode](int32_t x) -> int32_t {return x + currentMode;});
                 conjpsi_modes_j.insert(conjpsi_modes_j.end(), conjpsi_virtualModes_j.begin(), conjpsi_virtualModes_j.end());               
@@ -4964,66 +5071,87 @@ namespace QTensorNet
         std::vector<int32_t> omegaModes_right;
         std::vector<int64_t> omegaExtents_right;
 
-        for(size_t j = numprocessingNodes; j < numSites_; ++j) 
+        if(middle)
         {
-            const size_t& i = keep_nodes[j - numprocessingNodes];
-           
-            std::vector<int32_t> psi_modes_j = GetTensorModes(i, false);
-            std::vector<int64_t> psi_extents_j = GetTensorExtents(i, false);
+            const size_t i1 = keep_nodes[0];
+            const size_t j1 = accessPoint[i1];
+
+            const size_t i2 = keep_nodes[1];
+            const size_t j2 = accessPoint[i2];
             
-            omegaModes_left.insert(omegaModes_left.end(), psi_modes_j.begin(), psi_modes_j.end());
-            omegaExtents_left.insert(omegaExtents_left.end(), psi_extents_j.begin(), psi_extents_j.end());
+            omegaModes_left = {modesIn[j1][nodes_[i1].physModes_.size() + Psi_bond_indexA], 
+                               modesIn[j2][nodes_[i2].physModes_.size() + Psi_bond_indexB]};
 
-            std::vector<int32_t> conjpsi_modes_j = ConjPsiphysModes[j];
+            omegaExtents_left = {extentsIn[j1][nodes_[i1].physModes_.size() + Psi_bond_indexA], 
+                                 extentsIn[j2][nodes_[i2].physModes_.size() + Psi_bond_indexB]};
 
-            std::vector<int32_t> conjpsi_virtualModes_j = (ConjPsi == nullptr) ? nodes_[i].virtualModes_ : ConjPsi->nodes_[i].virtualModes_;
-            std::transform(conjpsi_virtualModes_j.begin(), conjpsi_virtualModes_j.end(), conjpsi_virtualModes_j.begin(), 
-                          [&currentMode](int32_t x) -> int32_t {return x + currentMode;});
-            conjpsi_modes_j.insert(conjpsi_modes_j.end(), conjpsi_virtualModes_j.begin(), conjpsi_virtualModes_j.end());
+            omegaModes_right = {modesIn[j1 + numprocessingNodes][ConjPsiphysModes[j1].size() + ConjPsi_bond_indexA], 
+                                modesIn[j2 + numprocessingNodes][ConjPsiphysModes[j2].size() + ConjPsi_bond_indexB]};
 
-            omegaModes_right.insert(omegaModes_right.end(), conjpsi_modes_j.begin(), conjpsi_modes_j.end());
-            
-            if(ConjPsi == nullptr)
-            {
-                omegaExtents_right.insert(omegaExtents_right.end(), psi_extents_j.begin(), psi_extents_j.end());
-            }
-            else
-            {
-                std::vector<int64_t> conjpsi_extents_j = ConjPsi->GetTensorExtents(i, false);
-                omegaExtents_right.insert(omegaExtents_right.end(), conjpsi_extents_j.begin(), conjpsi_extents_j.end());
-            }
+            omegaExtents_right = {extentsIn[j1 + numprocessingNodes][ConjPsiphysModes[j1].size() + ConjPsi_bond_indexA], 
+                                  extentsIn[j2 + numprocessingNodes][ConjPsiphysModes[j2].size() + ConjPsi_bond_indexB]};
         }
+        else
+        {
+            for(size_t j = numprocessingNodes; j < numSites_; ++j) 
+            {
+                const size_t& i = keep_nodes[j - numprocessingNodes];
+            
+                std::vector<int32_t> psi_modes_j = GetTensorModes(i, false);
+                std::vector<int64_t> psi_extents_j = GetTensorExtents(i, false);
 
-        ConjPsiphysModes.clear();
+                omegaModes_left.insert(omegaModes_left.end(), psi_modes_j.begin(), psi_modes_j.end());
+                omegaExtents_left.insert(omegaExtents_left.end(), psi_extents_j.begin(), psi_extents_j.end());
 
-        auto removeDuplicates = [](std::vector<int32_t>& modes, std::vector<int64_t>& extents) 
-                                {
-                                    std::vector<bool> to_remove(modes.size(), false);
-                                    
-                                    for(size_t i = 0; i < modes.size(); ++i) 
+                std::vector<int32_t> conjpsi_modes_j = ConjPsiphysModes[j];
+
+                std::vector<int32_t> conjpsi_virtualModes_j = (ConjPsi == nullptr) ? nodes_[i].virtualModes_ : ConjPsi->nodes_[i].virtualModes_;
+                std::transform(conjpsi_virtualModes_j.begin(), conjpsi_virtualModes_j.end(), conjpsi_virtualModes_j.begin(), 
+                              [&currentMode](int32_t x) -> int32_t {return x + currentMode;});
+                conjpsi_modes_j.insert(conjpsi_modes_j.end(), conjpsi_virtualModes_j.begin(), conjpsi_virtualModes_j.end());
+
+                omegaModes_right.insert(omegaModes_right.end(), conjpsi_modes_j.begin(), conjpsi_modes_j.end());
+
+                if(ConjPsi == nullptr)
+                {
+                    omegaExtents_right.insert(omegaExtents_right.end(), psi_extents_j.begin(), psi_extents_j.end());
+                }
+                else
+                {
+                    std::vector<int64_t> conjpsi_extents_j = ConjPsi->GetTensorExtents(i, false);
+                    omegaExtents_right.insert(omegaExtents_right.end(), conjpsi_extents_j.begin(), conjpsi_extents_j.end());
+                }
+            }
+
+            auto removeDuplicates = [](std::vector<int32_t>& modes, std::vector<int64_t>& extents) 
                                     {
-                                        for(size_t j = i + 1; j < modes.size(); ++j) 
+                                        std::vector<bool> to_remove(modes.size(), false);
+
+                                        for(size_t i = 0; i < modes.size(); ++i) 
                                         {
-                                            if (modes[i] == modes[j]) 
+                                            for(size_t j = i + 1; j < modes.size(); ++j) 
                                             {
-                                                if(!to_remove[i]) to_remove[i] = true;
-                                                if(!to_remove[j]) to_remove[j] = true;
+                                                if (modes[i] == modes[j]) 
+                                                {
+                                                    if(!to_remove[i]) to_remove[i] = true;
+                                                    if(!to_remove[j]) to_remove[j] = true;
+                                                }
                                             }
                                         }
-                                    }
-                                    
-                                    for(int64_t i = static_cast<int64_t>(to_remove.size()) - 1L; i >= 0L; --i) 
-                                    {
-                                        if(to_remove[i]) 
-                                        {
-                                            modes.erase(modes.begin() + i);
-                                            extents.erase(extents.begin() + i);
-                                        }
-                                    }
-                                };
 
-        removeDuplicates(omegaModes_left, omegaExtents_left);
-        removeDuplicates(omegaModes_right, omegaExtents_right);
+                                        for(int64_t i = static_cast<int64_t>(to_remove.size()) - 1L; i >= 0L; --i) 
+                                        {
+                                            if(to_remove[i]) 
+                                            {
+                                                modes.erase(modes.begin() + i);
+                                                extents.erase(extents.begin() + i);
+                                            }
+                                        }
+                                    };
+
+            removeDuplicates(omegaModes_left, omegaExtents_left);
+            removeDuplicates(omegaModes_right, omegaExtents_right);
+        }
         
         modesIn.back() = omegaModes_left;
         extentsIn.back() = omegaExtents_left;
@@ -5046,28 +5174,31 @@ namespace QTensorNet
             return parent[x] == x ? x : parent[x] = find(parent[x]);
         };
     
-        for (const auto& pair : graph_) 
+        for(const auto& pair : graph_) 
         {                
             auto it1 = std::find(keep_nodes.begin(), keep_nodes.end(), pair.first);
             auto it2 = std::find(keep_nodes.begin(), keep_nodes.end(), pair.second);
 
-            if(it1 == keep_nodes.end())
+            if((it1 == keep_nodes.end()) || middle)
             {
-                if (!parent.count(pair.first)) 
+                if(!parent.count(pair.first)) 
                 {
                     parent[pair.first] = pair.first;
                 }
             }
 
-            if(it2 == keep_nodes.end())
+            if((it2 == keep_nodes.end()) || middle)
             {
-                if (!parent.count(pair.second)) 
+                if(!parent.count(pair.second)) 
                 {
                     parent[pair.second] = pair.second;
                 }
             }
 
-            if((it1 == keep_nodes.end()) && (it2 == keep_nodes.end()))
+            if(((it1 == keep_nodes.end()) && (it2 == keep_nodes.end())) || 
+               (middle && (((it1 == keep_nodes.end()) && (it2 != keep_nodes.end())) || 
+                           ((it1 != keep_nodes.end()) && (it2 == keep_nodes.end())))))
+               
             {
                 parent[find(pair.first)] = find(pair.second);
             }
@@ -5075,14 +5206,14 @@ namespace QTensorNet
 
         std::unordered_map<size_t, std::set<size_t>> temp;
     
-        for (const auto& p : parent) 
+        for(const auto& p : parent) 
         {
             temp[find(p.first)].insert(p.first);
         }
     
         std::vector<std::set<size_t>> leaves;
     
-        for (auto& group : temp) 
+        for(auto& group : temp) 
         {
             leaves.push_back(std::move(group.second));
         }
@@ -5102,45 +5233,35 @@ namespace QTensorNet
                                 const std::vector<std::vector<int64_t>>& in_extents,
                                 std::vector<int32_t>& out_modes,
                                 std::vector<int64_t>& out_extents)
-                               {
-                                    std::unordered_map<int32_t, int16_t> modes_count;
-                                    std::unordered_map<int32_t, int64_t> modes_vs_extents;
-                               
-                                    const size_t num_nodes = in_modes.size();
-                               
-                                    for(size_t i = 0; i < num_nodes; ++i) 
+                                {
+                                    std::unordered_map<int32_t, size_t> modes_count;
+                                                            
+                                    for(const auto& modi : in_modes)
+                                    {                                   
+                                        for(const auto modj : modi)
+                                        {
+                                            modes_count[modj]++;
+                                        }
+                                    }
+                                    
+                                    for(size_t i = 0; i < in_modes.size(); ++i)
                                     {
                                         const size_t num_modes = in_modes[i].size();
                                         const auto& modi = in_modes[i];
                                         const auto& exti = in_extents[i];
-                                        
-                                        for(size_t j = 0; j < num_modes; ++j) 
+                                    
+                                        for(size_t j = 0; j < num_modes; ++j)
                                         {
                                             const int32_t modj = modi[j];
-                                       
-                                            modes_count[modj]++;                                      
-                                            modes_vs_extents[modj] = exti[j];
+                                        
+                                            if(modes_count[modj] == 1)
+                                            {
+                                                out_modes.push_back(modj);
+                                                out_extents.push_back(exti[j]);
+                                            }
                                         }
                                     }
-                                   
-                                    std::vector<std::pair<int32_t, int64_t>> free_pairs;
-                                    for(const auto& [mod, count] : modes_count) 
-                                    {
-                                        if(count == 1) 
-                                        {
-                                            free_pairs.emplace_back(mod, modes_vs_extents[mod]);
-                                        }
-                                    }
-                                   
-                                    std::sort(free_pairs.begin(), free_pairs.end(),
-                                              [](const auto& a, const auto& b) -> bool {return a.first < b.first;});
-                                   
-                                    for(const auto& [mod, ext] : free_pairs)
-                                    {
-                                        out_modes.push_back(mod);
-                                        out_extents.push_back(ext);
-                                    }
-                               };
+                                };
 
         for(size_t i = 0; i < numLeaves; ++i)
         {
@@ -5384,8 +5505,9 @@ namespace QTensorNet
                 
                 auto [rThisInTensors, rThisTNDescAB] = Psi->EvaluateTensorNetDescriptorOfEffectiveOperator(this, 
                                                                                                            cache,
-                                                                                                           nullptr, 
                                                                                                            {siteA, siteB},
+                                                                                                           nullptr,
+                                                                                                           false,
                                                                                                            stream_num,
                                                                                                            optimizerAttributes);
 
@@ -5601,8 +5723,9 @@ namespace QTensorNet
 
                     auto [rRHSInTensorsAB, rRHSTNDescAB] = EvaluateTensorNetDescriptorOfEffectiveOperator(RHS, 
                                                                                                           cache,
-                                                                                                          nullptr, 
                                                                                                           {siteA, siteB},
+                                                                                                          nullptr,
+                                                                                                          false,
                                                                                                           stream_num,
                                                                                                           optimizerAttributes);
 
@@ -5674,8 +5797,9 @@ namespace QTensorNet
 
                             auto [rRHSInTensorsS, rRHSTNDescS] = EvaluateTensorNetDescriptorOfEffectiveOperator(RHS, 
                                                                                                                 cache,
-                                                                                                                nullptr, 
                                                                                                                 {site},
+                                                                                                                nullptr, 
+                                                                                                                false,
                                                                                                                 stream_num,
                                                                                                                 optimizerAttributes);
 
