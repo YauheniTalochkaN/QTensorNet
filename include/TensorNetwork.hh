@@ -218,16 +218,26 @@ namespace QTensorNet
                                              size_t verbose = 0UL,
                                              const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes = CuTensorNetMethods::optimalContractionOptimizerAttributes,
                                              int32_t numAutotuningIterations = 0);
-        void UpdateUsingTDVP(const TensorNetwork* RHS,
-                             const Integrators::BaseIntegrator& solver,
-                             double dt,
-                             size_t edge = 0UL,
-                             size_t order = 1UL,
-                             bool cached = true,
-                             bool verbose = false,
-                             size_t stream_num = 0UL,
-                             const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes = CuTensorNetMethods::optimalContractionOptimizerAttributes,
-                             int32_t numAutotuningIterations = 0);
+        void UpdateUsing1TDVP(const TensorNetwork* RHS,
+                              const Integrators::BaseIntegrator& solver,
+                              double dt,
+                              size_t edge = 0UL,
+                              size_t order = 1UL,
+                              bool cached = true,
+                              bool verbose = false,
+                              size_t stream_num = 0UL,
+                              const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes = CuTensorNetMethods::optimalContractionOptimizerAttributes,
+                              int32_t numAutotuningIterations = 0);
+        void UpdateUsing2TDVP(const TensorNetwork* RHS,
+                              const Integrators::BaseIntegrator& solver,
+                              double dt,
+                              size_t edge = 0UL,
+                              size_t order = 1UL,
+                              bool cached = true,
+                              bool verbose = false,
+                              size_t stream_num = 0UL,
+                              const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes = CuTensorNetMethods::optimalContractionOptimizerAttributes,
+                              int32_t numAutotuningIterations = 0);
 
         static bool check_;
 

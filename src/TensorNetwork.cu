@@ -5600,16 +5600,16 @@ namespace QTensorNet
         return new_ground_value;
     }
 
-    void TensorNetwork::UpdateUsingTDVP(const TensorNetwork* RHS,
-                                        const Integrators::BaseIntegrator& solver,
-                                        double dt,
-                                        size_t edge,
-                                        size_t order,
-                                        bool cached,
-                                        bool verbose,
-                                        size_t stream_num,
-                                        const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes,
-                                        int32_t numAutotuningIterations)
+    void TensorNetwork::UpdateUsing1TDVP(const TensorNetwork* RHS,
+                                         const Integrators::BaseIntegrator& solver,
+                                         double dt,
+                                         size_t edge,
+                                         size_t order,
+                                         bool cached,
+                                         bool verbose,
+                                         size_t stream_num,
+                                         const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes,
+                                         int32_t numAutotuningIterations)
     {
         if(check_)
         {
@@ -5683,18 +5683,346 @@ namespace QTensorNet
         bool loopFree;
         graphTraversalType traversal = GetGraphTraversalToRoot(graph_, numSites_, edge, loopFree);
 
-        std::vector<size_t> visits(numSites_, 0UL);
-        for(const auto& [node1, node2] : traversal)
+        std::vector<std::vector<size_t>> ext_traversal;
+
+        for(const auto& [siteA, siteB] : traversal)
         {
-            ++visits[node1];
-            ++visits[node2];
+            ext_traversal.push_back({siteA});
+            ext_traversal.push_back({siteA, siteB});
         }
 
-        std::vector<size_t> evaluated(numSites_, 0UL);
+        ext_traversal.push_back({traversal.back().second});
+
+        std::vector<double> pk_vec = GetSuzukiCoeffs(order);
+
+        CachedLeaves cache;
+
+        for(const auto& pk : pk_vec)
+        {            
+            for(size_t sweep = 0UL; sweep < 2UL; ++sweep)
+            {            
+                for(const auto& sites : ext_traversal)
+                {
+                    if(sites.size() == 1UL)
+                    {
+                        const size_t siteA = sites[0];
+                        
+                        if(siteA != orthogonalityCenter)
+                        {
+                            std::set<size_t> changed_tensors = OrthogonalizeAround(siteA, orthogonalityCenter, stream_num);
+
+                            cache.EraseLeavesIf(changed_tensors);
+
+                            orthogonalityCenter = siteA;
+                        }
+
+                        auto [rRHSInTensorsA, rRHSTNDescA] = EvaluateTensorNetDescriptorOfEffectiveOperator(RHS, 
+                                                                                                            cache,
+                                                                                                            {siteA},
+                                                                                                            nullptr,
+                                                                                                            false,
+                                                                                                            stream_num,
+                                                                                                            optimizerAttributes);
+
+                        OperatorVectorProduct* rRHSbyVecProductA = CuTensorNetMethods::BuildOperatorVectorProduct(rRHSTNDescA,
+                                                                                                                  rRHSInTensorsA,
+                                                                                                                  streams_.at(stream_num),
+                                                                                                                  0.8 / static_cast<double>(numStreams_),
+                                                                                                                  workSpaceLimit_,
+                                                                                                                  workSpacePreference_,
+                                                                                                                  optimizerAttributes,
+                                                                                                                  numAutotuningIterations,
+                                                                                                                  CuTensorNetMethods::MPI_);
+
+                        void* tensorOutA = solver.Integrate(rRHSbyVecProductA->GetProductFunction(), 
+                                                            rRHSbyVecProductA->GetOutTensorSize(), 
+                                                            dt * pk / 2.0, 
+                                                            tensors_[siteA]);
+
+                        rRHSbyVecProductA->ClearTNMetaData();
+
+                        delete rRHSbyVecProductA;
+
+                        if(!cached)
+                        {
+                            cache.Clear();
+                        }
+
+                        cache.EraseLeavesIf({siteA});
+
+                        HANDLE_CUDA_ERROR(cudaFree(tensors_[siteA]));
+
+                        tensors_[siteA] = tensorOutA;
+                    }
+                    else
+                    {
+                        const size_t siteA = sites[0];
+                        const size_t siteB = sites[1];
+
+                        if(siteA != orthogonalityCenter)
+                        {
+                            std::set<size_t> changed_tensors = OrthogonalizeAround(siteA, orthogonalityCenter, stream_num);
+
+                            cache.EraseLeavesIf(changed_tensors);
+
+                            orthogonalityCenter = siteA;
+                        }
+                        
+                        auto& siteA_node = nodes_[siteA];
+                        auto& siteB_node = nodes_[siteB];
+
+                        auto itA = siteA_node.neighbors_.find(siteB);
+                        auto itB = siteB_node.neighbors_.find(siteA);
+
+                        size_t indexA = itA->second;
+                        size_t indexB = itB->second;
+
+                        size_t bond_indexA = siteA_node.physModes_.size() + indexA;
+                        size_t bond_indexB = siteB_node.physModes_.size() + indexB;
+
+                        std::vector<int32_t> modesA = GetTensorModes(siteA, false);
+                        std::vector<int64_t> extentsA = GetTensorExtents(siteA, false);
+
+                        int32_t left_bond_mode = nextMode_;
+                        int32_t right_bond_mode = modesA[bond_indexA];
+                        int64_t old_extentABbond = extentsA[bond_indexA];
+
+                        std::vector<int32_t> modesAq = modesA;
+                        std::vector<int64_t> extentsAq = extentsA;
+
+                        int64_t dimAwobond = static_cast<int64_t>(GetTensorSize(siteA, false)) / siteA_node.virtualExtents_[indexA];
+                        int64_t new_extentABbond = std::min({dimAwobond, old_extentABbond});
+
+                        modesAq[bond_indexA] = left_bond_mode;
+                        extentsAq[bond_indexA] = new_extentABbond;
+
+                        std::vector<int32_t> modesAr = {left_bond_mode, right_bond_mode};
+                        std::vector<int64_t> extentsAr = {new_extentABbond, old_extentABbond};
+
+                        void* tensorAq;
+                        void* tensorAr;
+
+                        HANDLE_CUDA_ERROR(cudaMalloc(&tensorAq, static_cast<size_t>(dimAwobond) * static_cast<size_t>(new_extentABbond) * sizeof(complexType)));
+                        HANDLE_CUDA_ERROR(cudaMalloc(&tensorAr, static_cast<size_t>(new_extentABbond) * static_cast<size_t>(old_extentABbond) * sizeof(complexType)));
+
+                        CuTensorNetMethods::ApplyTensorQR(modesA,
+                                                          extentsA,
+                                                          modesAq,
+                                                          extentsAq,
+                                                          modesAr,
+                                                          extentsAr,
+                                                          tensors_[siteA],
+                                                          tensorAq,
+                                                          tensorAr,
+                                                          streams_.at(stream_num));
+
+                        siteA_node.virtualExtents_[indexA] = new_extentABbond;
+
+                        HANDLE_CUDA_ERROR(cudaFree(tensors_[siteA]));
+
+                        tensors_[siteA] = tensorAq;
+
+                        cache.EraseLeavesIf({siteA});
+
+                        auto [rRHSInTensorsS, rRHSTNDescS] = EvaluateTensorNetDescriptorOfEffectiveOperator(RHS, 
+                                                                                                            cache,
+                                                                                                            {siteA, siteB},
+                                                                                                            nullptr, 
+                                                                                                            true,
+                                                                                                            stream_num,
+                                                                                                            optimizerAttributes);
+
+                        OperatorVectorProduct* rRHSbyVecProductS = CuTensorNetMethods::BuildOperatorVectorProduct(rRHSTNDescS,
+                                                                                                                  rRHSInTensorsS,
+                                                                                                                  streams_.at(stream_num),
+                                                                                                                  0.8 / static_cast<double>(numStreams_),
+                                                                                                                  workSpaceLimit_,
+                                                                                                                  workSpacePreference_,
+                                                                                                                  optimizerAttributes,
+                                                                                                                  numAutotuningIterations,
+                                                                                                                  CuTensorNetMethods::MPI_);
+                        
+                        void* tensorS = solver.Integrate(rRHSbyVecProductS->GetProductFunction(), 
+                                                         rRHSbyVecProductS->GetOutTensorSize(), 
+                                                         -dt * pk / 2.0, 
+                                                         tensorAr);
+
+                        rRHSbyVecProductS->ClearTNMetaData();
+
+                        delete rRHSbyVecProductS;
+
+                        if(!cached)
+                        {
+                            cache.Clear();
+                        }
+
+                        HANDLE_CUDA_ERROR(cudaFree(tensorAr));
+
+                        std::vector<std::vector<int32_t>> modesInSB(2);
+                        std::vector<std::vector<int64_t>> extentsInSB(2);
+
+                        modesInSB[0] = modesAr;
+                        extentsInSB[0] = extentsAr;
+
+                        modesInSB[1] = GetTensorModes(siteB, false);
+                        extentsInSB[1] = GetTensorExtents(siteB, false);
+
+                        std::vector<const void*> tensorsInSB(2);
+
+                        tensorsInSB[0] = tensorS;
+                        tensorsInSB[1] = tensors_[siteB];
+
+                        std::vector<cutensornetTensorQualifiers_t> qualifiersInSB(2);
+
+                        qualifiersInSB[0].isConjugate = 0;
+                        qualifiersInSB[0].isConstant = 1;
+                        qualifiersInSB[0].requiresGradient = 0;
+
+                        qualifiersInSB[1].isConjugate = 0;
+                        qualifiersInSB[1].isConstant = 1;
+                        qualifiersInSB[1].requiresGradient = 0;
+
+                        std::vector<int32_t> modesOutB = modesInSB[1];
+
+                        modesOutB[bond_indexB] = left_bond_mode;
+
+                        siteB_node.virtualExtents_[indexB] = new_extentABbond;
+
+                        int64_t dimOutB = static_cast<int64_t>(GetTensorSize(siteB, false));
+
+                        void* tensorOutB;
+                        HANDLE_CUDA_ERROR(cudaMalloc(&tensorOutB, dimOutB * sizeof(complexType)));
+
+                        CuTensorNetMethods::ContractTensors(modesInSB,
+                                                            extentsInSB,
+                                                            qualifiersInSB,
+                                                            tensorsInSB,
+                                                            modesOutB,
+                                                            dimOutB,
+                                                            tensorOutB,
+                                                            streams_.at(stream_num),
+                                                            0.8 / static_cast<double>(numStreams_),
+                                                            workSpaceLimit_,
+                                                            {{0, 1}},
+                                                            workSpacePreference_); 
+
+                        HANDLE_CUDA_ERROR(cudaFree(tensorS));
+                        HANDLE_CUDA_ERROR(cudaFree(tensors_[siteB]));
+
+                        tensors_[siteB] = tensorOutB;
+
+                        orthogonalityCenter = siteB;
+
+                        cache.EraseLeavesIf({siteB});
+                    }
+                }
+
+                std::reverse(ext_traversal.begin(), ext_traversal.end());
+
+                for(auto& it : ext_traversal)
+                {
+                    std::reverse(it.begin(), it.end());
+                }
+            }
+        }
+
+        if(psi_partition != CUTENSORNET_TENSOR_SVD_PARTITION_SV)
+        {
+            partition_ = psi_partition;
+        }
+    }
+
+    void TensorNetwork::UpdateUsing2TDVP(const TensorNetwork* RHS,
+                                         const Integrators::BaseIntegrator& solver,
+                                         double dt,
+                                         size_t edge,
+                                         size_t order,
+                                         bool cached,
+                                         bool verbose,
+                                         size_t stream_num,
+                                         const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes,
+                                         int32_t numAutotuningIterations)
+    {
+        if(check_)
+        {
+            if(tensors_.empty()) 
+            {
+                throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                                         "The state of the current TN is not initialized.");
+            }
+
+            if(RHS->tensors_.empty()) 
+            {
+                throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                                         "The state of RHS TN is not initialized.");
+            }
+
+            if(numSites_ != RHS->numSites_)
+            {
+                throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                                         "The number of sites of the current TN differs from that of RHS TN.");
+            }
+
+            if(!loopFree_)
+            {
+                throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                                         "The TDVP algorithm cannot be applied to loop TNs.");
+            }
+
+            if(graph_ != RHS->graph_)
+            {
+                throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                                         "The graphs of the current TN and RHS TN differ from each other.");
+            }
+
+            for(size_t i = 0; i < numSites_; ++i)
+            {
+                auto& siteI_node = this->nodes_[i];
+                const auto& RHS_node = RHS->nodes_[i];
+                
+                if(!siteI_node.extra_virtualModes_.empty())
+                {
+                    throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                                             "Duplicate bonds should be excluded for site " 
+                                             + std::to_string(i) + " of the current TN.");
+                }
+
+                if(!RHS_node.extra_virtualModes_.empty())
+                {
+                    throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                                             "Duplicate bonds should be excluded for site " 
+                                             + std::to_string(i) + " of RHS TN.");
+                }  
+                
+                if(RHS_node.physModes_.size() / 2UL != siteI_node.physModes_.size())
+                {
+                    throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                                             "The phys modes of the current TN and RHS TN are not suitable at site " 
+                                             + std::to_string(i) + ".");
+                }
+            }
+        }
+
+        cutensornetTensorSVDPartition_t psi_partition = partition_;   
+
+        if(psi_partition != CUTENSORNET_TENSOR_SVD_PARTITION_SV)
+        {
+            partition_ = CUTENSORNET_TENSOR_SVD_PARTITION_SV;
+        }
+
+        size_t orthogonalityCenter = std::numeric_limits<size_t>::max();
+
+        bool loopFree;
+        graphTraversalType traversal = GetGraphTraversalToRoot(graph_, numSites_, edge, loopFree);
 
         size_t num_edges = traversal.size();
 
-        std::vector<std::vector<size_t>> back(num_edges - 1UL);
+        std::vector<size_t> back(num_edges - 1UL);
+
+        for(size_t j = 0UL; j < num_edges - 1UL; ++j)
+        {
+            back[j] = traversal[j].second;
+        }
 
         std::vector<double> pk_vec = GetSuzukiCoeffs(order);
 
@@ -5710,13 +6038,13 @@ namespace QTensorNet
                 {
                     const auto& [siteA, siteB] = traversal[j];
 
-                    cache.EraseLeavesIf({siteA, siteB});
-
                     if((siteA != orthogonalityCenter) && (siteB != orthogonalityCenter))
                     {
-                        std::set<size_t> changed_tensors = OrthogonalizeAround(siteB, orthogonalityCenter, stream_num);
+                        std::set<size_t> changed_tensors = OrthogonalizeAround(siteA, orthogonalityCenter, stream_num);
 
                         cache.EraseLeavesIf(changed_tensors);
+
+                        orthogonalityCenter = siteA;
                     }
 
                     void* tensorInAB = ComputeTwoSiteVector(siteA, siteB, false, stream_num);
@@ -5755,6 +6083,8 @@ namespace QTensorNet
                         cache.Clear();
                     }
 
+                    cache.EraseLeavesIf({siteA, siteB});
+
                     SetTwoSiteVector(siteA, 
                                      siteB, 
                                      tensorOutAB, 
@@ -5766,85 +6096,67 @@ namespace QTensorNet
 
                     HANDLE_CUDA_ERROR(cudaFree(tensorOutAB));
 
-                    if((i == 0UL) && (sweep == 0UL))
-                    {
-                        ++evaluated[siteA];
-                        ++evaluated[siteB];
-                        
-                        for(const auto& site : {siteA, siteB})
-                        {
-                            if(evaluated[site] < visits[site])
-                            {
-                                back.at(j).push_back(site);
-                            }
-                        }   
-                    }
-
                     if(j < num_edges - 1UL)
                     {
-                        for(const auto& site : back[j])
-                        {                            
-                            cache.EraseLeavesIf({site});
-                            
-                            if(site != orthogonalityCenter)
-                            {
-                                std::set<size_t> changed_tensors = OrthogonalizeAround(site, orthogonalityCenter, stream_num);
+                        const size_t site = back[j];
 
-                                cache.EraseLeavesIf(changed_tensors);
+                        if(site != orthogonalityCenter)
+                        {
+                            std::set<size_t> changed_tensors = OrthogonalizeAround(site, orthogonalityCenter, stream_num);
 
-                                orthogonalityCenter = site;
-                            }
+                            cache.EraseLeavesIf(changed_tensors);
 
-                            auto [rRHSInTensorsS, rRHSTNDescS] = EvaluateTensorNetDescriptorOfEffectiveOperator(RHS, 
-                                                                                                                cache,
-                                                                                                                {site},
-                                                                                                                nullptr, 
-                                                                                                                false,
-                                                                                                                stream_num,
-                                                                                                                optimizerAttributes);
-
-                            OperatorVectorProduct* rRHSbyVecProductS = CuTensorNetMethods::BuildOperatorVectorProduct(rRHSTNDescS,
-                                                                                                                      rRHSInTensorsS,
-                                                                                                                      streams_.at(stream_num),
-                                                                                                                      0.8 / static_cast<double>(numStreams_),
-                                                                                                                      workSpaceLimit_,
-                                                                                                                      workSpacePreference_,
-                                                                                                                      optimizerAttributes,
-                                                                                                                      numAutotuningIterations,
-                                                                                                                      CuTensorNetMethods::MPI_);
-                            
-                            void* tensorOutS = solver.Integrate(rRHSbyVecProductS->GetProductFunction(), 
-                                                                rRHSbyVecProductS->GetOutTensorSize(), 
-                                                                -dt * pk / 2.0, 
-                                                                tensors_[site]);
-                            
-                            HANDLE_CUDA_ERROR(cudaFree(tensors_[site]));
-
-                            tensors_[site] = tensorOutS;
-
-                            rRHSbyVecProductS->ClearTNMetaData();
-
-                            delete rRHSbyVecProductS;
-
-                            if(!cached)
-                            {
-                                cache.Clear();
-                            }
+                            orthogonalityCenter = site;
                         }
+
+                        auto [rRHSInTensorsS, rRHSTNDescS] = EvaluateTensorNetDescriptorOfEffectiveOperator(RHS, 
+                                                                                                            cache,
+                                                                                                            {site},
+                                                                                                            nullptr, 
+                                                                                                            false,
+                                                                                                            stream_num,
+                                                                                                            optimizerAttributes);
+
+                        OperatorVectorProduct* rRHSbyVecProductS = CuTensorNetMethods::BuildOperatorVectorProduct(rRHSTNDescS,
+                                                                                                                  rRHSInTensorsS,
+                                                                                                                  streams_.at(stream_num),
+                                                                                                                  0.8 / static_cast<double>(numStreams_),
+                                                                                                                  workSpaceLimit_,
+                                                                                                                  workSpacePreference_,
+                                                                                                                  optimizerAttributes,
+                                                                                                                  numAutotuningIterations,
+                                                                                                                  CuTensorNetMethods::MPI_);
+                        
+                        void* tensorOutS = solver.Integrate(rRHSbyVecProductS->GetProductFunction(), 
+                                                            rRHSbyVecProductS->GetOutTensorSize(), 
+                                                            -dt * pk / 2.0, 
+                                                            tensors_[site]);
+                        
+                        HANDLE_CUDA_ERROR(cudaFree(tensors_[site]));
+
+                        tensors_[site] = tensorOutS;
+
+                        rRHSbyVecProductS->ClearTNMetaData();
+
+                        delete rRHSbyVecProductS;
+
+                        if(!cached)
+                        {
+                            cache.Clear();
+                        }
+
+                        cache.EraseLeavesIf({site});
                     }
                 }
 
                 std::reverse(traversal.begin(), traversal.end());
+                
                 for(auto& it : traversal)
                 {
                     std::swap(it.first, it.second);
                 }
 
                 std::reverse(back.begin(), back.end());
-                for(auto& it : back)
-                {
-                    std::reverse(it.begin(), it.end());
-                }
             }
         }
 

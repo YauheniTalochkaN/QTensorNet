@@ -78,7 +78,7 @@ int main(int argc, char* argv[])
         size_t numSites = Nx * Ny;
         size_t numSitesExt = 94;
         int64_t physExtent = 2L;
-        int64_t maxVirtualExtentVec = 150L;
+        int64_t maxVirtualExtentVec = 512L;
         int64_t maxVirtualExtentOp = 100L;
         double absCutoffVec = 0.0;
         double absCutoffOp = 0.0;
@@ -111,7 +111,7 @@ int main(int argc, char* argv[])
             physExtentsVec[i].push_back(1L);
         }
 
-        size_t root = 0UL;
+        size_t root = 93UL;
 
         QTensorNet::virtualModesGraphType graph = {{64, 0, 2}, {64, 8, 2}, {64, 1, 2}, {64, 9, 2}, {65, 16, 2}, {65, 24, 2}, 
                                                    {65, 17, 2}, {65, 25, 2}, {66, 32, 2}, {66, 40, 2}, {66, 33, 2}, {66, 41, 2}, 
@@ -123,12 +123,12 @@ int main(int argc, char* argv[])
                                                    {74, 37, 2}, {74, 45, 2}, {75, 52, 2}, {75, 60, 2}, {75, 53, 2}, {75, 61, 2}, 
                                                    {76, 6, 2}, {76, 14, 2}, {76, 7, 2}, {76, 15, 2}, {77, 22, 2}, {77, 30, 2}, 
                                                    {77, 23, 2}, {77, 31, 2}, {78, 38, 2}, {78, 46, 2}, {78, 39, 2}, {78, 47, 2}, 
-                                                   {79, 54, 2}, {79, 62, 2}, {79, 55, 2}, {79, 63, 2}, {80, 64, 10}, {80, 68, 10}, 
-                                                   {65, 81, 10}, {69, 81, 10}, {80, 82, 10}, {81, 82, 10}, {72, 83, 10}, {76, 83, 10}, 
-                                                   {73, 84, 10}, {77, 84, 10}, {83, 85, 10}, {84, 85, 10}, {85, 86, 10}, {82, 86, 10}, 
-                                                   {66, 87, 10}, {70, 87, 10}, {67, 88, 10}, {71, 88, 10}, {87, 89, 10}, {88, 89, 10}, 
-                                                   {74, 90, 10}, {78, 90, 10}, {75, 91, 10}, {79, 91, 10}, {90, 92, 10}, {91, 92, 10}, 
-                                                   {89, 93, 10}, {92, 93, 10}, {86, 93, 10}};
+                                                   {79, 54, 2}, {79, 62, 2}, {79, 55, 2}, {79, 63, 2}, {80, 64, 32}, {80, 68, 32}, 
+                                                   {65, 81, 32}, {69, 81, 32}, {80, 82, 128}, {81, 82, 128}, {72, 83, 32}, {76, 83, 32}, 
+                                                   {73, 84, 32}, {77, 84, 32}, {83, 85, 128}, {84, 85, 128}, {85, 86, 256}, {82, 86, 256}, 
+                                                   {66, 87, 32}, {70, 87, 32}, {67, 88, 32}, {71, 88, 32}, {87, 89, 128}, {88, 89, 128}, 
+                                                   {74, 90, 32}, {78, 90, 32}, {75, 91, 32}, {79, 91, 32}, {90, 92, 128}, {91, 92, 128}, 
+                                                   {89, 93, 256}, {92, 93, 256}, {86, 93, 512}};
 
 
         QTensorNet::TensorNetwork psi(physExtentsVec, graph, root, maxVirtualExtentVec, 1UL, workSpaceLimitVec);
@@ -314,7 +314,7 @@ int main(int argc, char* argv[])
 
             try
             {
-                psi.UpdateUsingTDVP(&hamiltonian, solver, dt, root, 4UL, true, false, 0UL, optimizer_attributes, 5);
+                psi.UpdateUsing1TDVP(&hamiltonian, solver, dt, root, 3UL, true, false, 0UL, optimizer_attributes, 5);
 
                 auto [norm_device, descNorm] = psi.GetDensityMatrix({}, true, 0UL, optimizer_attributes);
                 auto norm_host = QTensorNet::CuArrayMethods::GPUArrayToVector(norm_device, 1).at(0);

@@ -365,7 +365,7 @@ int main(int argc, char* argv[])
 
             try
             {
-                rho.UpdateUsingTDVP(Liouvillian, solver, dt, 0UL, 3UL, true, false, 0UL, optimizer_attributes, 5);
+                rho.UpdateUsing2TDVP(Liouvillian, solver, dt, 0UL, 3UL, true, false, 0UL, optimizer_attributes, 5);
 
                 QTensorNet::complexType rho_tr = rho.ComputeOperatorTrace(nullptr, 
                                                                           0UL, 

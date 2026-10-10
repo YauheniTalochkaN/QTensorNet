@@ -295,7 +295,7 @@ int main(int argc, char* argv[])
 
             try
             {
-                psi.UpdateUsingTDVP(&hamiltonian, solver, dt, root, 4UL, true, false, 0UL, optimizer_attributes, 5);
+                psi.UpdateUsing2TDVP(&hamiltonian, solver, dt, root, 3UL, true, false, 0UL, optimizer_attributes, 5);
 
                 auto [norm_device, descNorm] = psi.GetDensityMatrix({}, true, 0UL, optimizer_attributes);
                 auto norm_host = QTensorNet::CuArrayMethods::GPUArrayToVector(norm_device, 1).at(0);
