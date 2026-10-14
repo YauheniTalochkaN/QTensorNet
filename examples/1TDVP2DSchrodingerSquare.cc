@@ -76,7 +76,7 @@ int main(int argc, char* argv[])
         size_t Nx = 8UL;
         size_t Ny = 8UL;
         size_t numSites = Nx * Ny;
-        size_t numSitesExt = 94;
+        size_t numSitesExt = 94UL;
         int64_t physExtent = 2L;
         int64_t maxVirtualExtentVec = 512L;
         int64_t maxVirtualExtentOp = 100L;
@@ -91,7 +91,7 @@ int main(int argc, char* argv[])
         {{CUTENSORNET_CONTRACTION_OPTIMIZER_CONFIG_HYPER_NUM_SAMPLES, 10},
          {CUTENSORNET_CONTRACTION_OPTIMIZER_CONFIG_RECONFIG_NUM_ITERATIONS, 1000}};
         
-        size_t num_iter = 100UL;
+        size_t num_iter = 200UL;
         double tmax = 1.0;
         double hz = 3.04438;
 
