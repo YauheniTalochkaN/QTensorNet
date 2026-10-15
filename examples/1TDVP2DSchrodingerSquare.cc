@@ -346,7 +346,10 @@ int main(int argc, char* argv[])
 
         try
         {            
-            QTensorNet::complexType energy = psi.ComputeMatrixElement(&hamiltonian);
+            QTensorNet::complexType energy = psi.ComputeMatrixElement(&hamiltonian, 
+                                                                       nullptr, 
+                                                                       0UL, 
+                                                                       optimizer_attributes);
 
             std::cout << "Energy of the system: " << energy << std::endl;
         }
