@@ -262,7 +262,7 @@ int main(int argc, char* argv[])
 
         //---------------------------------------------------------------------------------
 
-        std::ofstream outFile("ExpectedSigmaZ_3DChain.txt");
+        std::ofstream outFile("ExpectedSigmaZ_2DChain.txt");
 
         if(!outFile.is_open()) 
         {

@@ -1146,7 +1146,7 @@ namespace QTensorNet
                                      "The file " + tensorsPath.string() + "can not be opened.");
         }
 
-        for (size_t id = 0; id < numSites_; ++id) 
+        for(size_t id = 0; id < numSites_; ++id) 
         {
             size_t ten_size = GetTensorSize(id);
 
@@ -1154,7 +1154,7 @@ namespace QTensorNet
 
             ifsTensors.read(reinterpret_cast<char*>(data.data()), ten_size * sizeof(complexType));
 
-            if (ifsTensors.gcount() != static_cast<std::streamsize>(ten_size * sizeof(complexType))) 
+            if(ifsTensors.gcount() != static_cast<std::streamsize>(ten_size * sizeof(complexType))) 
             {
                 throw std::runtime_error("TensorNetwork::Load: "
                                          "Unexpected end of file while reading tensor " + std::to_string(id) + 
@@ -1169,7 +1169,7 @@ namespace QTensorNet
 
         streams_ = std::vector<cudaStream_t>(numStreams_, nullptr);
 
-        for (size_t i = 0; i < numStreams_; ++i)
+        for(size_t i = 0; i < numStreams_; ++i)
         {
             HANDLE_CUDA_ERROR(cudaStreamCreate(&streams_[i]));
         }
@@ -3788,23 +3788,25 @@ namespace QTensorNet
                 }
             }
 
-            if(Omega->tensors_.empty()) 
+            if(Omega != nullptr)
             {
-                throw std::runtime_error("TensorNetwork::ComputeMatrixElement: "
-                                         "The state of Omega TN is not initialized.");
-            }
+                if(Omega->tensors_.empty()) 
+                {
+                    throw std::runtime_error("TensorNetwork::ComputeMatrixElement: "
+                                             "The state of Omega TN is not initialized.");
+                }
 
-            if(numSites_ != Omega->numSites_)
-            {
-                throw std::runtime_error("TensorNetwork::ComputeMatrixElement: "
-                                         "The number of sites of the current TN differs from that of Omega TN.");
+                if(numSites_ != Omega->numSites_)
+                {
+                    throw std::runtime_error("TensorNetwork::ComputeMatrixElement: "
+                                             "The number of sites of the current TN differs from that of Omega TN.");
+                }
             }
 
             for(size_t i = 0; i < numSites_; ++i) 
             {
                 const auto& siteI_node = nodes_[i];
-                const auto& Omega_node = Omega->nodes_[i];
-
+                
                 if(!siteI_node.extra_virtualModes_.empty())
                 {
                     throw std::runtime_error("TensorNetwork::ComputeMatrixElement: "
@@ -3821,30 +3823,47 @@ namespace QTensorNet
                                                  + std::to_string(i) + " of ConjPsi TN.");
                     }
                 }
-
-                if(!Omega_node.extra_virtualModes_.empty())
+                
+                if(Omega != nullptr)
                 {
-                    throw std::runtime_error("TensorNetwork::ComputeMatrixElement: "
-                                             "Duplicate bonds should be excluded for site " 
-                                             + std::to_string(i) + " of Omega TN.");
-                }
+                    const auto& Omega_node = Omega->nodes_[i];
 
-                if(ConjPsi != nullptr)
-                {
-                    if(siteI_node.physModes_.size() + ConjPsi->nodes_[i].physModes_.size() != Omega_node.physModes_.size())
+                    if(!Omega_node.extra_virtualModes_.empty())
                     {
                         throw std::runtime_error("TensorNetwork::ComputeMatrixElement: "
-                                                 "The total number of phys modes of the current TN and ConjPsi TN must be "
-                                                 "equal to that of Omega TN at site " + std::to_string(i) + ".");
+                                                 "Duplicate bonds should be excluded for site " 
+                                                 + std::to_string(i) + " of Omega TN.");
+                    }
+
+                    if(ConjPsi != nullptr)
+                    {
+                        if(siteI_node.physModes_.size() + ConjPsi->nodes_[i].physModes_.size() != Omega_node.physModes_.size())
+                        {
+                            throw std::runtime_error("TensorNetwork::ComputeMatrixElement: "
+                                                     "The total number of phys modes of the current TN and ConjPsi TN must be "
+                                                     "equal to that of Omega TN at site " + std::to_string(i) + ".");
+                        }
+                    }
+                    else
+                    {
+                        if(siteI_node.physModes_.size() * 2UL != Omega_node.physModes_.size())
+                        {
+                            throw std::runtime_error("TensorNetwork::ComputeMatrixElement: "
+                                                     "The double number of phys modes of the current TN must be "
+                                                     "equal to that of Omega TN at site " + std::to_string(i) + ".");
+                        }
                     }
                 }
                 else
                 {
-                    if(siteI_node.physModes_.size() * 2UL != Omega_node.physModes_.size())
+                    if(ConjPsi != nullptr)
                     {
-                        throw std::runtime_error("TensorNetwork::ComputeMatrixElement: "
-                                                 "The double number of phys modes of the current TN must be "
-                                                 "equal to that of Omega TN at site " + std::to_string(i) + ".");
+                        if(siteI_node.physModes_.size() != ConjPsi->nodes_[i].physModes_.size())
+                        {
+                            throw std::runtime_error("TensorNetwork::ComputeMatrixElement: "
+                                                     "The number of phys modes of the current TN and ConjPsi TN must be "
+                                                     "equal at site " + std::to_string(i) + ".");
+                        }
                     }
                 }
             }
@@ -3853,7 +3872,7 @@ namespace QTensorNet
         int32_t currentMode = nextMode_;
         int32_t currentConjPsiMode = (ConjPsi == nullptr) ? nextMode_ : ConjPsi->nextMode_;
 
-        const size_t numInputTensors = 3UL * numSites_;
+        const size_t numInputTensors = numSites_ * ((Omega != nullptr) ? 3UL : 2UL);
 
         std::vector<std::vector<int32_t>> modesIn(numInputTensors);
         std::vector<std::vector<int64_t>> extentsIn(numInputTensors);
@@ -3862,22 +3881,29 @@ namespace QTensorNet
         
         for(size_t i = 0; i < numSites_; ++i)
         {
-            size_t physModeSize;
-
-            if(ConjPsi != nullptr) 
+            if(Omega != nullptr)
             {
-                physModeSize = ConjPsi->nodes_[i].physModes_.size();
+                size_t physModeSize;
+
+                if(ConjPsi != nullptr) 
+                {
+                    physModeSize = ConjPsi->nodes_[i].physModes_.size();
+                }
+                else
+                {
+                    physModeSize = nodes_[i].physModes_.size();
+                }
+
+                ConjPsiphysModes[i].resize(physModeSize);
+                
+                for(auto& el : ConjPsiphysModes[i])
+                {
+                    el = currentMode++;
+                }
             }
             else
             {
-                physModeSize = nodes_[i].physModes_.size();
-            }
-
-            ConjPsiphysModes[i].resize(physModeSize);
-
-            for(auto& el : ConjPsiphysModes[i])
-            {
-                el = currentMode++;
+                ConjPsiphysModes[i] = nodes_[i].physModes_;
             }
         }
         
@@ -3908,18 +3934,21 @@ namespace QTensorNet
                 extentsIn[idx1] = ConjPsi->GetTensorExtents(i, false);
             }
 
-            std::vector<int32_t> operator_modes_i = siteI_node.physModes_;
-            operator_modes_i.insert(operator_modes_i.end(), ConjPsiphysModes[i].begin(), ConjPsiphysModes[i].end());
+            if(Omega != nullptr)
+            {
+                std::vector<int32_t> operator_modes_i = siteI_node.physModes_;
+                operator_modes_i.insert(operator_modes_i.end(), ConjPsiphysModes[i].begin(), ConjPsiphysModes[i].end());
 
-            std::vector<int32_t> operator_virtualModes_i = Omega->nodes_[i].virtualModes_;
-            std::transform(operator_virtualModes_i.begin(), operator_virtualModes_i.end(), operator_virtualModes_i.begin(), 
-                          [&currentMode, &currentConjPsiMode](int32_t x) -> int32_t {return x + currentMode + currentConjPsiMode;});
-            operator_modes_i.insert(operator_modes_i.end(), operator_virtualModes_i.begin(), operator_virtualModes_i.end());
+                std::vector<int32_t> operator_virtualModes_i = Omega->nodes_[i].virtualModes_;
+                std::transform(operator_virtualModes_i.begin(), operator_virtualModes_i.end(), operator_virtualModes_i.begin(), 
+                              [&currentMode, &currentConjPsiMode](int32_t x) -> int32_t {return x + currentMode + currentConjPsiMode;});
+                operator_modes_i.insert(operator_modes_i.end(), operator_virtualModes_i.begin(), operator_virtualModes_i.end());
 
-            size_t idx2 = 2 * numSites_ + i;
+                size_t idx2 = 2 * numSites_ + i;
 
-            modesIn[idx2] = operator_modes_i;
-            extentsIn[idx2] = Omega->GetTensorExtents(i, false);
+                modesIn[idx2] = operator_modes_i;
+                extentsIn[idx2] = Omega->GetTensorExtents(i, false);
+            }
         }
         
         std::vector<const void*> tensorsIn(numInputTensors);
@@ -3937,7 +3966,10 @@ namespace QTensorNet
                 tensorsIn[numSites_ + i] = ConjPsi->tensors_[i];
             }
 
-            tensorsIn[2 * numSites_ + i] = Omega->tensors_[i];
+            if(Omega != nullptr)
+            {
+                tensorsIn[2 * numSites_ + i] = Omega->tensors_[i];
+            }
         }
 
         std::vector<cutensornetTensorQualifiers_t> qualifiersIn(numInputTensors);
@@ -3953,10 +3985,13 @@ namespace QTensorNet
             qualifiersIn[idx1].isConstant = 1;
             qualifiersIn[idx1].requiresGradient = 0;
 
-            size_t idx2 = 2 * numSites_ + i;
-            qualifiersIn[idx2].isConjugate = 0;
-            qualifiersIn[idx2].isConstant = 1;
-            qualifiersIn[idx2].requiresGradient = 0;
+            if(Omega != nullptr)
+            {
+                size_t idx2 = 2 * numSites_ + i;
+                qualifiersIn[idx2].isConjugate = 0;
+                qualifiersIn[idx2].isConstant = 1;
+                qualifiersIn[idx2].requiresGradient = 0;
+            }
         }
 
         void* result_device;

@@ -182,7 +182,7 @@ namespace QTensorNet
                                          const TensorNetwork* ConjPsi = nullptr,
                                          size_t stream_num = 0UL,
                                          const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes = CuTensorNetMethods::optimalContractionOptimizerAttributes) const;
-        complexType ComputeMatrixElement(const TensorNetwork* Omega,
+        complexType ComputeMatrixElement(const TensorNetwork* Omega = nullptr,
                                          const TensorNetwork* ConjPsi = nullptr,
                                          size_t stream_num = 0UL,
                                          const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes = CuTensorNetMethods::optimalContractionOptimizerAttributes) const;

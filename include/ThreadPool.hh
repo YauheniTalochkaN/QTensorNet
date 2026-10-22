@@ -7,11 +7,32 @@
 #include <mutex>
 #include <condition_variable>
 #include <future>
+#include <atomic>  
+#include <stdexcept>
 
 namespace QTensorNet
-{
+{    
     class ThreadPool
     {
+        private:
+            struct ActiveGuard
+            {
+                std::atomic<size_t>& counter_;
+            
+                explicit ActiveGuard(std::atomic<size_t>& counter) noexcept : counter_(counter)
+                {
+                
+                }
+            
+                ActiveGuard(const ActiveGuard&) = delete;
+                ActiveGuard& operator=(const ActiveGuard&) = delete;
+            
+                ~ActiveGuard() noexcept
+                {
+                    counter_.fetch_sub(1UL, std::memory_order_relaxed);
+                }
+            };
+        
         public:
             ThreadPool(size_t num_threads = std::thread::hardware_concurrency())
             {
@@ -43,8 +64,18 @@ namespace QTensorNet
                                     task = std::move(tasks_.front());
                                     tasks_.pop();
                                 }
-                            
-                                task();
+
+                                active_.fetch_add(1UL, std::memory_order_relaxed);
+
+                                {
+                                    ActiveGuard guard{active_};
+                                
+                                    try
+                                    {
+                                        task();
+                                    }
+                                    catch(...){}
+                                }
                             }
                         });
                     }
@@ -109,6 +140,11 @@ namespace QTensorNet
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
 
+                    if(stop_)
+                    {
+                        throw std::runtime_error("ThreadPool: AddTask called after shutdown");
+                    }
+
                     tasks_.emplace([task]() {(*task)();});
                 }
             
@@ -117,15 +153,20 @@ namespace QTensorNet
                 return future;
             }
         
-            size_t GetSize() const
+            size_t GetSize() const noexcept
             {
                 return threads_.size();
             }
         
-            size_t GetPendingTasks() const
+            size_t GetActiveTasks() const noexcept
+            {
+                return active_.load(std::memory_order_relaxed);
+            }
+
+            size_t GetQueuedTasks() const
             {
                 std::lock_guard<std::mutex> lock(mutex_);
-                
+            
                 return tasks_.size();
             }
         
@@ -134,6 +175,7 @@ namespace QTensorNet
             std::queue<std::function<void()>> tasks_;
             mutable std::mutex mutex_;
             std::condition_variable cv_;
+            std::atomic<size_t> active_{0UL};
             bool stop_{false};
     };
 }
