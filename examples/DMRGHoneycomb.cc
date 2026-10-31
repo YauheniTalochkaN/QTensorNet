@@ -399,15 +399,15 @@ int main(int argc, char* argv[])
 
                 try
                 {                    
-                    QTensorNet::complexType energy = hamiltonian.FindGroundStateUsingDMRG(&tts_ground, 
-                                                                                          /*error_threshold*/ 1.0E-7, 
-                                                                                          /*max_iter*/ 50,
-                                                                                          /*max_virtual_extents*/ max_virtual_extents,
-                                                                                          /*stream_num*/ 0UL,
-                                                                                          /*cached*/ true,
-                                                                                          /*verbose*/ 1UL, 
-                                                                                          /*optimizerAttributes*/ optimizer_attributes,
-                                                                                          /*numAutotuningIterations*/ 5);
+                    QTensorNet::complexType energy = hamiltonian.FindGroundStateUsing2DMRG(&tts_ground, 
+                                                                                           /*error_threshold*/ 1.0E-7, 
+                                                                                           /*max_iter*/ 50,
+                                                                                           /*max_virtual_extents*/ max_virtual_extents,
+                                                                                           /*stream_num*/ 0UL,
+                                                                                           /*cached*/ true,
+                                                                                           /*verbose*/ 1UL, 
+                                                                                           /*optimizerAttributes*/ optimizer_attributes,
+                                                                                           /*numAutotuningIterations*/ 5);
 
                     std::cout << "The ground energy of the system: " << energy << std::endl;
                 }

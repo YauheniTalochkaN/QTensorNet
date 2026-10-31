@@ -5421,45 +5421,44 @@ namespace QTensorNet
                                                   dimOut_right)};
     }
 
-    complexType TensorNetwork::FindGroundStateUsingDMRG(TensorNetwork* Psi,
-                                                        double error_threshold,
-                                                        size_t max_iter,
-                                                        const std::vector<size_t>& max_virtual_extents,
-                                                        size_t stream_num,
-                                                        bool cached,
-                                                        size_t verbose,
-                                                        const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes,
-                                                        int32_t numAutotuningIterations)
+    complexType TensorNetwork::FindGroundStateUsing1DMRG(TensorNetwork* Psi,
+                                                         double error_threshold,
+                                                         size_t max_iter,
+                                                         size_t stream_num,
+                                                         bool cached,
+                                                         size_t verbose,
+                                                         const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes,
+                                                         int32_t numAutotuningIterations)
     {
         if(check_)
         {
             if(tensors_.empty()) 
             {
-                throw std::runtime_error("TensorNetwork::FindGroundStateUsingDMRG: "
+                throw std::runtime_error("TensorNetwork::FindGroundStateUsing1DMRG: "
                                          "The state of the current TN is not initialized.");
             }
 
             if(Psi->tensors_.empty()) 
             {
-                throw std::runtime_error("TensorNetwork::FindGroundStateUsingDMRG: "
+                throw std::runtime_error("TensorNetwork::FindGroundStateUsing1DMRG: "
                                          "The state of Psi TN is not initialized.");
             }
 
             if(numSites_ != Psi->numSites_)
             {
-                throw std::runtime_error("TensorNetwork::FindGroundStateUsingDMRG: "
+                throw std::runtime_error("TensorNetwork::FindGroundStateUsing1DMRG: "
                                          "The number of sites of the current TN differs from that of Psi TN.");
             }
 
             if(!Psi->loopFree_)
             {
-                throw std::runtime_error("TensorNetwork::FindGroundStateUsingDMRG: "
+                throw std::runtime_error("TensorNetwork::FindGroundStateUsing1DMRG: "
                                          "The DMRG algorithm cannot be applied to loop TNs.");
             }
 
             if(graph_ != Psi->graph_)
             {
-                throw std::runtime_error("TensorNetwork::FindGroundStateUsingDMRG: "
+                throw std::runtime_error("TensorNetwork::FindGroundStateUsing1DMRG: "
                                          "The graphs of the current TN and the Psi TN differ from each other.");
             }
 
@@ -5470,27 +5469,227 @@ namespace QTensorNet
                 
                 if(!siteI_node.extra_virtualModes_.empty())
                 {
-                    throw std::runtime_error("TensorNetwork::FindGroundStateUsingDMRG: "
+                    throw std::runtime_error("TensorNetwork::FindGroundStateUsing1DMRG: "
                                              "Duplicate bonds should be excluded for site " 
                                              + std::to_string(i) + " of the current TN.");
                 }
 
                 if(!Psi_node.extra_virtualModes_.empty())
                 {
-                    throw std::runtime_error("TensorNetwork::FindGroundStateUsingDMRG: "
+                    throw std::runtime_error("TensorNetwork::FindGroundStateUsing1DMRG: "
                                              "Duplicate bonds should be excluded for site " 
                                              + std::to_string(i) + " of Psi TN.");
                 }  
 
                 if(siteI_node.physModes_.size() % 2UL != 0)
                 {
-                    throw std::runtime_error("TensorNetwork::FindGroundStateUsingDMRG: "
+                    throw std::runtime_error("TensorNetwork::FindGroundStateUsing1DMRG: "
                                              "The current TN must be a operator.");
                 }
 
                 if(siteI_node.physModes_.size() / 2UL != Psi_node.physModes_.size())
                 {
-                    throw std::runtime_error("TensorNetwork::FindGroundStateUsingDMRG: "
+                    throw std::runtime_error("TensorNetwork::FindGroundStateUsing1DMRG: "
+                                             "The phys modes of the current TN and Psi TN are not suitable at site " 
+                                             + std::to_string(i) + ".");
+                }
+            }
+        }
+
+        size_t orthogonalityCenter = std::numeric_limits<size_t>::max();
+
+        auto [start_norm_device, start_descNorm] = Psi->GetDensityMatrix({}, 
+                                                                         true, 
+                                                                         stream_num, 
+                                                                         optimizerAttributes);
+        complexType start_norm_host;
+        HANDLE_CUDA_ERROR(cudaMemcpy((void*)(&start_norm_host), start_norm_device, sizeof(complexType), cudaMemcpyDeviceToHost));
+        HANDLE_CUDA_ERROR(cudaFree(start_norm_device));
+
+        std::vector<size_t> traversal;
+
+        for(const auto& [siteA, siteB] : Psi->graphTraversalToRoot_)
+        {
+            if(std::find(traversal.begin(), traversal.end(), siteA) == traversal.end())
+            {
+                traversal.push_back(siteA);
+            }
+        }
+
+        for(const auto& [siteA, siteB] : Psi->graphTraversalToRoot_)
+        {
+            if(std::find(traversal.begin(), traversal.end(), siteB) == traversal.end())
+            {
+                traversal.push_back(siteB);
+            }
+        }
+
+        CachedLeaves cache;
+
+        complexType previous_ground_value(1.0E150, 0.0);
+        complexType new_ground_value(1.0E100, 0.0);
+
+        size_t iter = 0;
+
+        while(std::abs(previous_ground_value - new_ground_value) > error_threshold * std::abs(new_ground_value))
+        {                 
+            for(const auto& site : traversal)
+            {                                                                  
+                cache.EraseLeavesIf({site});
+                
+                if(site != orthogonalityCenter)
+                {
+                    cache.EraseLeavesIf(Psi->OrthogonalizeAround(site, orthogonalityCenter, stream_num));
+
+                    orthogonalityCenter = site;
+                }
+                
+                auto [rThisInTensors, rThisTNDesc] = Psi->EvaluateTensorNetDescriptorOfEffectiveOperator(this, 
+                                                                                                         cache,
+                                                                                                         {site},
+                                                                                                         nullptr,
+                                                                                                         false,
+                                                                                                         stream_num,
+                                                                                                         optimizerAttributes);
+
+                OperatorVectorProduct* rThisbyVecProduct = CuTensorNetMethods::BuildOperatorVectorProduct(rThisTNDesc,
+                                                                                                          rThisInTensors,
+                                                                                                          Psi->streams_.at(stream_num),
+                                                                                                          0.8 / static_cast<double>(numStreams_),
+                                                                                                          workSpaceLimit_,
+                                                                                                          workSpacePreference_,
+                                                                                                          optimizerAttributes,
+                                                                                                          numAutotuningIterations,
+                                                                                                          CuTensorNetMethods::MPI_);
+
+                auto eignsys = CuOperatorMethods::HeOperatorGroundState(rThisbyVecProduct->GetProductFunction(), 
+                                                                        rThisbyVecProduct->GetOutTensorSize(), 
+                                                                        Psi->tensors_[site]);
+                
+                HANDLE_CUDA_ERROR(cudaFree(Psi->tensors_[site]));
+
+                Psi->tensors_[site] = eignsys.second;
+
+                rThisbyVecProduct->ClearTNMetaData();
+
+                delete rThisbyVecProduct;
+
+                if(!cached)
+                {
+                    cache.Clear();
+                }
+            }
+
+            auto [norm_device, descNorm] = Psi->GetDensityMatrix({}, 
+                                                                 true, 
+                                                                 stream_num, 
+                                                                 optimizerAttributes);
+                
+            complexType norm_host;
+            HANDLE_CUDA_ERROR(cudaMemcpy((void*)(&norm_host), norm_device, sizeof(complexType), cudaMemcpyDeviceToHost));
+            HANDLE_CUDA_ERROR(cudaFree(norm_device));
+            
+            Psi->ApplyScalar(std::sqrt(start_norm_host) / std::sqrt(norm_host), {orthogonalityCenter});
+                
+            previous_ground_value = new_ground_value;
+
+            new_ground_value = Psi->ComputeMatrixElement(this,
+                                                         nullptr, 
+                                                         stream_num, 
+                                                         optimizerAttributes) / start_norm_host;
+
+            ++iter;
+
+            if(verbose >= 1UL)
+            {
+                std::cout << "TensorNetwork::FindGroundStateUsing1DMRG: New ground value = " 
+                          << std::scientific << std::setprecision(10) 
+                          << new_ground_value << ";" << std::endl << std::defaultfloat;
+            }
+
+            if(iter >= max_iter)
+            {
+                std::cout << "TensorNetwork::FindGroundStateUsing1DMRG: "
+                             "The number of iterations has exceeded the limit." << std::endl;
+                break;
+            }
+
+            std::reverse(traversal.begin(), traversal.end());
+        }
+        
+        return new_ground_value;
+    }
+
+    complexType TensorNetwork::FindGroundStateUsing2DMRG(TensorNetwork* Psi,
+                                                         double error_threshold,
+                                                         size_t max_iter,
+                                                         const std::vector<size_t>& max_virtual_extents,
+                                                         size_t stream_num,
+                                                         bool cached,
+                                                         size_t verbose,
+                                                         const CuTensorNetMethods::ContractionOptimizerAttributes& optimizerAttributes,
+                                                         int32_t numAutotuningIterations)
+    {
+        if(check_)
+        {
+            if(tensors_.empty()) 
+            {
+                throw std::runtime_error("TensorNetwork::FindGroundStateUsing2DMRG: "
+                                         "The state of the current TN is not initialized.");
+            }
+
+            if(Psi->tensors_.empty()) 
+            {
+                throw std::runtime_error("TensorNetwork::FindGroundStateUsing2DMRG: "
+                                         "The state of Psi TN is not initialized.");
+            }
+
+            if(numSites_ != Psi->numSites_)
+            {
+                throw std::runtime_error("TensorNetwork::FindGroundStateUsing2DMRG: "
+                                         "The number of sites of the current TN differs from that of Psi TN.");
+            }
+
+            if(!Psi->loopFree_)
+            {
+                throw std::runtime_error("TensorNetwork::FindGroundStateUsing2DMRG: "
+                                         "The DMRG algorithm cannot be applied to loop TNs.");
+            }
+
+            if(graph_ != Psi->graph_)
+            {
+                throw std::runtime_error("TensorNetwork::FindGroundStateUsing2DMRG: "
+                                         "The graphs of the current TN and the Psi TN differ from each other.");
+            }
+
+            for(size_t i = 0; i < numSites_; ++i)
+            {
+                auto& siteI_node = this->nodes_[i];
+                const auto& Psi_node = Psi->nodes_[i];
+                
+                if(!siteI_node.extra_virtualModes_.empty())
+                {
+                    throw std::runtime_error("TensorNetwork::FindGroundStateUsing2DMRG: "
+                                             "Duplicate bonds should be excluded for site " 
+                                             + std::to_string(i) + " of the current TN.");
+                }
+
+                if(!Psi_node.extra_virtualModes_.empty())
+                {
+                    throw std::runtime_error("TensorNetwork::FindGroundStateUsing2DMRG: "
+                                             "Duplicate bonds should be excluded for site " 
+                                             + std::to_string(i) + " of Psi TN.");
+                }  
+
+                if(siteI_node.physModes_.size() % 2UL != 0)
+                {
+                    throw std::runtime_error("TensorNetwork::FindGroundStateUsing2DMRG: "
+                                             "The current TN must be a operator.");
+                }
+
+                if(siteI_node.physModes_.size() / 2UL != Psi_node.physModes_.size())
+                {
+                    throw std::runtime_error("TensorNetwork::FindGroundStateUsing2DMRG: "
                                              "The phys modes of the current TN and Psi TN are not suitable at site " 
                                              + std::to_string(i) + ".");
                 }
@@ -5531,9 +5730,7 @@ namespace QTensorNet
                 
                 if((siteA != orthogonalityCenter) && (siteB != orthogonalityCenter))
                 {
-                    std::set<size_t> changed_tensors = Psi->OrthogonalizeAround(siteB, orthogonalityCenter, stream_num);
-
-                    cache.EraseLeavesIf(changed_tensors);
+                    cache.EraseLeavesIf(Psi->OrthogonalizeAround(siteB, orthogonalityCenter, stream_num));
                 }
 
                 void* tensorABStart = Psi->ComputeTwoSiteVector(siteA, siteB, false, stream_num);
@@ -5608,14 +5805,14 @@ namespace QTensorNet
 
             if(verbose >= 1UL)
             {
-                std::cout << "TensorNetwork::FindGroundStateUsingDMRG: New ground value = " 
+                std::cout << "TensorNetwork::FindGroundStateUsing2DMRG: New ground value = " 
                           << std::scientific << std::setprecision(10) 
                           << new_ground_value << ";" << std::endl << std::defaultfloat;
             }
 
             if(iter >= max_iter)
             {
-                std::cout << "TensorNetwork::FindGroundStateUsingDMRG: "
+                std::cout << "TensorNetwork::FindGroundStateUsing2DMRG: "
                              "The number of iterations has exceeded the limit." << std::endl;
                 break;
             }
@@ -5650,31 +5847,31 @@ namespace QTensorNet
         {
             if(tensors_.empty()) 
             {
-                throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                throw std::runtime_error("TensorNetwork::UpdateUsing1TDVP: "
                                          "The state of the current TN is not initialized.");
             }
 
             if(RHS->tensors_.empty()) 
             {
-                throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                throw std::runtime_error("TensorNetwork::UpdateUsing1TDVP: "
                                          "The state of RHS TN is not initialized.");
             }
 
             if(numSites_ != RHS->numSites_)
             {
-                throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                throw std::runtime_error("TensorNetwork::UpdateUsing1TDVP: "
                                          "The number of sites of the current TN differs from that of RHS TN.");
             }
 
             if(!loopFree_)
             {
-                throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                throw std::runtime_error("TensorNetwork::UpdateUsing1TDVP: "
                                          "The TDVP algorithm cannot be applied to loop TNs.");
             }
 
             if(graph_ != RHS->graph_)
             {
-                throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                throw std::runtime_error("TensorNetwork::UpdateUsing1TDVP: "
                                          "The graphs of the current TN and RHS TN differ from each other.");
             }
 
@@ -5685,21 +5882,21 @@ namespace QTensorNet
                 
                 if(!siteI_node.extra_virtualModes_.empty())
                 {
-                    throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                    throw std::runtime_error("TensorNetwork::UpdateUsing1TDVP: "
                                              "Duplicate bonds should be excluded for site " 
                                              + std::to_string(i) + " of the current TN.");
                 }
 
                 if(!RHS_node.extra_virtualModes_.empty())
                 {
-                    throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                    throw std::runtime_error("TensorNetwork::UpdateUsing1TDVP: "
                                              "Duplicate bonds should be excluded for site " 
                                              + std::to_string(i) + " of RHS TN.");
                 }  
                 
                 if(RHS_node.physModes_.size() / 2UL != siteI_node.physModes_.size())
                 {
-                    throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                    throw std::runtime_error("TensorNetwork::UpdateUsing1TDVP: "
                                              "The phys modes of the current TN and RHS TN are not suitable at site " 
                                              + std::to_string(i) + ".");
                 }
@@ -5744,9 +5941,7 @@ namespace QTensorNet
                         
                         if(siteA != orthogonalityCenter)
                         {
-                            std::set<size_t> changed_tensors = OrthogonalizeAround(siteA, orthogonalityCenter, stream_num);
-
-                            cache.EraseLeavesIf(changed_tensors);
+                            cache.EraseLeavesIf(OrthogonalizeAround(siteA, orthogonalityCenter, stream_num));
 
                             orthogonalityCenter = siteA;
                         }
@@ -5796,9 +5991,7 @@ namespace QTensorNet
 
                         if(siteA != orthogonalityCenter)
                         {
-                            std::set<size_t> changed_tensors = OrthogonalizeAround(siteA, orthogonalityCenter, stream_num);
-
-                            cache.EraseLeavesIf(changed_tensors);
+                            cache.EraseLeavesIf(OrthogonalizeAround(siteA, orthogonalityCenter, stream_num));
 
                             orthogonalityCenter = siteA;
                         }
@@ -5982,31 +6175,31 @@ namespace QTensorNet
         {
             if(tensors_.empty()) 
             {
-                throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                throw std::runtime_error("TensorNetwork::UpdateUsing2TDVP: "
                                          "The state of the current TN is not initialized.");
             }
 
             if(RHS->tensors_.empty()) 
             {
-                throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                throw std::runtime_error("TensorNetwork::UpdateUsing2TDVP: "
                                          "The state of RHS TN is not initialized.");
             }
 
             if(numSites_ != RHS->numSites_)
             {
-                throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                throw std::runtime_error("TensorNetwork::UpdateUsing2TDVP: "
                                          "The number of sites of the current TN differs from that of RHS TN.");
             }
 
             if(!loopFree_)
             {
-                throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                throw std::runtime_error("TensorNetwork::UpdateUsing2TDVP: "
                                          "The TDVP algorithm cannot be applied to loop TNs.");
             }
 
             if(graph_ != RHS->graph_)
             {
-                throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                throw std::runtime_error("TensorNetwork::UpdateUsing2TDVP: "
                                          "The graphs of the current TN and RHS TN differ from each other.");
             }
 
@@ -6017,21 +6210,21 @@ namespace QTensorNet
                 
                 if(!siteI_node.extra_virtualModes_.empty())
                 {
-                    throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                    throw std::runtime_error("TensorNetwork::UpdateUsing2TDVP: "
                                              "Duplicate bonds should be excluded for site " 
                                              + std::to_string(i) + " of the current TN.");
                 }
 
                 if(!RHS_node.extra_virtualModes_.empty())
                 {
-                    throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                    throw std::runtime_error("TensorNetwork::UpdateUsing2TDVP: "
                                              "Duplicate bonds should be excluded for site " 
                                              + std::to_string(i) + " of RHS TN.");
                 }  
                 
                 if(RHS_node.physModes_.size() / 2UL != siteI_node.physModes_.size())
                 {
-                    throw std::runtime_error("TensorNetwork::UpdateUsingTDVP: "
+                    throw std::runtime_error("TensorNetwork::UpdateUsing2TDVP: "
                                              "The phys modes of the current TN and RHS TN are not suitable at site " 
                                              + std::to_string(i) + ".");
                 }

@@ -66,7 +66,7 @@ include_directories(${QTensorNet_INCLUDE_DIR})
 #----------------------------------------------------------------------------------------------------------------------
 
 set(EXAMPLES 
-    TEBD1D RK1D 1TDVP2DSchrodingerSquare 2TDVP2DSchrodingerSquare 
+    TEBD1D TEBD2D RK1D 1TDVP2DSchrodingerSquare 2TDVP2DSchrodingerSquare 
     TDVP3DSchrodingerComplete TDVP3DvonNeumann DMRGSquareKagome DMRGHoneycomb
 )
 

@@ -5,7 +5,7 @@
             "includePath": [
                 "${workspaceFolder}/**",
                 "/usr/local/cuda-13.2/include",
-                "/opt/nvidia/hpc_sdk/Linux_x86_64/26.3/comm_libs/13.1/hpcx/latest/ompi/include"
+                "/opt/nvidia/hpc_sdk/Linux_x86_64/26.5/comm_libs/13.2/hpcx/latest/ompi/include"
             ],
             "defines": [],
             "compilerPath": "/usr/local/cuda-13.2/bin/nvcc",
