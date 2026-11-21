@@ -186,24 +186,6 @@ int main(int argc, char* argv[])
         auto Sminus_host = QTensorNet::BasisGates::SigmaMinus(0.5);
         auto Splus_host = QTensorNet::BasisGates::SigmaPlus(0.5);
 
-        auto build_liouvillian = [&unitOp]
-                                 (const QTensorNet::TensorNetwork& hamiltonian, QTensorNet::TensorNetwork** Liouvillian)
-                                 {
-                                      if(*Liouvillian != nullptr)
-                                      {
-                                          delete *Liouvillian;
-                                      }
-                                     
-                                      *Liouvillian = unitOp.EvaluateTensorNetProduct(&hamiltonian);
-                                     
-                                      QTensorNet::TensorNetwork* Liouvillian_right = hamiltonian.EvaluateTensorNetProduct(&unitOp, {true, false});
-                                      *Liouvillian_right *= QTensorNet::complexType(-1.0, 0.0);
-                                      
-                                      **Liouvillian += *Liouvillian_right;
-                                      
-                                      delete Liouvillian_right;
-                                 };
-
         //---Hamiltonian-------------------------------------------------------------------
 
         std::cout << "\nBuilding Hamiltonian components..." << std::endl;
@@ -297,20 +279,11 @@ int main(int argc, char* argv[])
         };
 
         //---------------------------------------------------------------------------------
-        
-        QTensorNet::TensorNetwork* Liouvillian = nullptr;
 
         std::cout << "\nBuilding Liouvillian..." << std::endl;
 
-        try
-        {
-            build_liouvillian(hamiltonian, &Liouvillian);
-        }
-        catch(const std::exception& ex)
-        {
-            std::cerr << ex.what() << std::endl;
-            std::exit(1);
-        }
+        QTensorNet::TensorNetwork Liouvillian = unitOp.EvaluateTensorNetProduct(&hamiltonian) -
+                                                hamiltonian.EvaluateTensorNetProduct(&unitOp, {true, false});
 
         //---------------------------------------------------------------------------------
 
@@ -365,7 +338,7 @@ int main(int argc, char* argv[])
 
             try
             {
-                rho.UpdateUsing2TDVP(Liouvillian, solver, dt, 0UL, 3UL, true, false, 0UL, optimizer_attributes, 5);
+                rho.UpdateUsing2TDVP(&Liouvillian, solver, dt, 0UL, 3UL, true, false, 0UL, optimizer_attributes, 5);
 
                 QTensorNet::complexType rho_tr = rho.ComputeOperatorTrace(nullptr, 
                                                                           0UL, 
@@ -409,8 +382,6 @@ int main(int argc, char* argv[])
         }
         
         HANDLE_CUDA_ERROR(cudaFree(Sz_device));
-
-        delete Liouvillian;
 
         QTensorNet::CuTensorNetMethods::SendSignalToMPICommWorld(-1);
 

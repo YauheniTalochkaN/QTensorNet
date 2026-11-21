@@ -32,6 +32,7 @@
 
 #include "CuErrorUtils.hh"
 #include "CuOperatorMethods.hh"
+#include "SlepcOperatorMethods.hh"
 #include "TensorDescriptor.hh"
 #include "TensorNetDescriptor.hh"
 #include "OperatorVectorProduct.hh"
@@ -94,6 +95,7 @@ namespace QTensorNet
                       const virtualModesGraphType& graph, size_t root = 0UL, int64_t maxVirtualExtent = 1L, 
                       size_t numStreams = 1UL, size_t workSpaceLimit = 4096UL /*MBytes*/);
         TensorNetwork(const std::string& path);
+        friend TensorNetwork UnitAs(const TensorNetwork& Psi);
         ~TensorNetwork();
         TensorNetwork(const TensorNetwork& other);
         TensorNetwork(TensorNetwork&& other) noexcept;
@@ -160,6 +162,8 @@ namespace QTensorNet
         void ApplyScalar(complexType scalar, const std::vector<size_t>& nodes = {});
         TensorNetwork& operator*=(complexType scalar);
         TensorNetwork operator*(complexType scalar) const;
+        TensorNetwork& operator/=(complexType scalar);
+        TensorNetwork operator/(complexType scalar) const;
         friend TensorNetwork operator*(complexType scalar, const TensorNetwork& Psi);
         void ApplyTensorNetOperator(const TensorNetwork* Omega, 
                                     bool verbose = false);
@@ -170,12 +174,14 @@ namespace QTensorNet
                           bool verbose = false);
         TensorNetwork& operator+=(const TensorNetwork& Psi);
         TensorNetwork operator+(const TensorNetwork& Psi) const;
-        TensorNetwork* EvaluateTensorNetProduct(const TensorNetwork* Omega, 
-                                                const std::pair<bool, bool>& transpose = {false, false},
-                                                const std::pair<bool, bool>& conjugate = {false, false},
-                                                int64_t maxVirtualExtent = 0L,
-                                                size_t stream_num = 0UL,
-                                                bool verbose = false) const;
+        TensorNetwork& operator-=(const TensorNetwork& Psi);
+        TensorNetwork operator-(const TensorNetwork& Psi) const;
+        TensorNetwork EvaluateTensorNetProduct(const TensorNetwork* Omega, 
+                                               const std::pair<bool, bool>& transpose = {false, false},
+                                               const std::pair<bool, bool>& conjugate = {false, false},
+                                               int64_t maxVirtualExtent = 0L,
+                                               size_t stream_num = 0UL,
+                                               bool verbose = false) const;
         complexType ComputeMatrixElement(const void* operatorData,
                                          std::vector<int32_t> operatorModes,
                                          std::vector<int64_t> operatorExtents,

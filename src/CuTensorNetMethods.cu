@@ -701,7 +701,7 @@ namespace QTensorNet
             size_t numInputTensors = modesIn.size();
             MPI_Bcast((void*)(&numInputTensors), 1, MPI_UINT64_T, 0, MPI_COMM_WORLD);
 
-            for (size_t i = 0; i < numInputTensors; ++i) 
+            for(size_t i = 0; i < numInputTensors; ++i) 
             {
                 size_t numModes = modesIn[i].size();
                 MPI_Bcast((void*)(&numModes), 1, MPI_UINT64_T, 0, MPI_COMM_WORLD);
@@ -776,7 +776,7 @@ namespace QTensorNet
             qualifiersIn.resize(numInputTensors);
             tensorsIn.resize(numInputTensors);
 
-            for (size_t i = 0; i < numInputTensors; ++i) 
+            for(size_t i = 0; i < numInputTensors; ++i) 
             {
                 size_t numModes;
                 MPI_Bcast((void*)(&numModes), 1, MPI_UINT64_T, 0, MPI_COMM_WORLD);

@@ -598,6 +598,57 @@ namespace QTensorNet
         Load(path);
     }
 
+    TensorNetwork UnitAs(const TensorNetwork& Psi)
+    {
+        if(TensorNetwork::check_)
+        {
+            for(size_t i = 0; i < Psi.numSites_; ++i)
+            {
+                const auto& Psi_node = Psi.nodes_[i];
+
+                if(!Psi_node.extra_virtualModes_.empty())
+                {
+                    throw std::runtime_error("TensorNetwork::UnitAs: "
+                                             "Duplicate bonds should be excluded for site " 
+                                             + std::to_string(i) + " of Psi TN.");
+                }  
+
+                if(Psi_node.physModes_.size() % 2UL != 0)
+                {
+                    throw std::runtime_error("TensorNetwork::UnitAs: "
+                                             "The Psi TN must be a operator.");
+                }
+            }
+        }
+        
+        TensorNetwork Unit(Psi);
+
+        std::vector<std::vector<complexType>> unit_tensors_host;
+
+        for(size_t i = 0; i < Psi.numSites_; ++i)
+        {
+            std::fill(Unit.nodes_[i].virtualExtents_.begin(), 
+                      Unit.nodes_[i].virtualExtents_.end(), 
+                      1L);
+            
+            const size_t size = Unit.GetTensorSize(i);
+            std::vector<complexType> data_host(size, complexType(0.0, 0.0));
+            
+            const size_t dim = static_cast<size_t>(std::llround(std::sqrt(static_cast<double>(size))));
+            
+            for(size_t j = 0; j < dim; ++j)
+            {
+                data_host[j + dim * j] = complexType(1.0, 0.0);
+            }
+        
+            unit_tensors_host.push_back(data_host);
+        }
+        
+        Unit.SetState(unit_tensors_host);
+
+        return Unit;
+    }
+
     TensorNetwork::~TensorNetwork()
     {
         ClearNet();
@@ -2803,6 +2854,28 @@ namespace QTensorNet
         return result;
     }
 
+    TensorNetwork& TensorNetwork::operator/=(complexType scalar)
+    {
+        if(std::abs(scalar) == 0.0)
+        {
+            throw std::invalid_argument("TensorNetwork::operator/=: "
+                                         "TensorNetwork division by zero.");
+        }
+        
+        *this *= complexType(1.0, 0.0) / scalar;
+
+        return *this;
+    }
+
+    TensorNetwork TensorNetwork::operator/(complexType scalar) const
+    {
+        TensorNetwork result(*this);
+
+        result /= scalar;
+
+        return result;
+    }
+
     TensorNetwork operator*(complexType scalar, const TensorNetwork& Psi)
     {
         return Psi * scalar;
@@ -3315,12 +3388,28 @@ namespace QTensorNet
         return result;
     }
 
-    TensorNetwork* TensorNetwork::EvaluateTensorNetProduct(const TensorNetwork* Omega, 
-                                                           const std::pair<bool, bool>& transpose,
-                                                           const std::pair<bool, bool>& conjugate,
-                                                           int64_t maxVirtualExtent,
-                                                           size_t stream_num, 
-                                                           bool verbose) const
+    TensorNetwork& TensorNetwork::operator-=(const TensorNetwork& Psi)
+    {
+        *this += Psi * QTensorNet::complexType(-1.0, 0.0);
+
+        return *this;
+    }
+
+    TensorNetwork TensorNetwork::operator-(const TensorNetwork& Psi) const
+    {
+        TensorNetwork result(*this);
+
+        result -= Psi;
+
+        return result;
+    }
+
+    TensorNetwork TensorNetwork::EvaluateTensorNetProduct(const TensorNetwork* Omega, 
+                                                          const std::pair<bool, bool>& transpose,
+                                                          const std::pair<bool, bool>& conjugate,
+                                                          int64_t maxVirtualExtent,
+                                                          size_t stream_num, 
+                                                          bool verbose) const
     {
         if(check_)
         { 
@@ -3376,24 +3465,24 @@ namespace QTensorNet
             }
         }
 
-        TensorNetwork* prodTN = new TensorNetwork(*this);
+        TensorNetwork prodTN(*this);
 
-        int32_t currentMode = prodTN->nextMode_;
+        int32_t currentMode = prodTN.nextMode_;
         
-        prodTN->nextMode_ += Omega->nextMode_;
+        prodTN.nextMode_ += Omega->nextMode_;
         
         if(maxVirtualExtent < 1L)
         {
-            prodTN->maxVirtualExtent_ += Omega->maxVirtualExtent_;
+            prodTN.maxVirtualExtent_ += Omega->maxVirtualExtent_;
         }
         else
         {            
-            prodTN->maxVirtualExtent_ = maxVirtualExtent;
+            prodTN.maxVirtualExtent_ = maxVirtualExtent;
         }
 
-        auto applying_func = [prodTN, Omega, currentMode, &transpose, &conjugate, &stream_num](size_t i) 
+        auto applying_func = [&prodTN, Omega, &currentMode, &transpose, &conjugate, &stream_num](size_t i) 
         {
-            auto& prodTN_node_i = prodTN->nodes_[i];
+            auto& prodTN_node_i = prodTN.nodes_[i];
             const auto& Omega_node_i = Omega->nodes_[i];
                         
             std::vector<int32_t> Omega_physModes_i = Omega_node_i.physModes_;
@@ -3415,15 +3504,15 @@ namespace QTensorNet
             std::vector<std::vector<int32_t>> modesIn(2);
             std::vector<std::vector<int64_t>> extentsIn(2);
                 
-            modesIn[0] = prodTN->GetTensorModes(i, false);
-            extentsIn[0] = prodTN->GetTensorExtents(i, false);
+            modesIn[0] = prodTN.GetTensorModes(i, false);
+            extentsIn[0] = prodTN.GetTensorExtents(i, false);
 
             modesIn[1] = OmegaModes;
             extentsIn[1] = OmegaExtents;
 
             std::vector<const void*> tensorsIn(2);
                 
-            tensorsIn[0] = prodTN->tensors_[i];
+            tensorsIn[0] = prodTN.tensors_[i];
             tensorsIn[1] = Omega->tensors_[i];
 
             std::vector<cutensornetTensorQualifiers_t> qualifiersIn(2);
@@ -3471,10 +3560,10 @@ namespace QTensorNet
             prodTN_node_i.extra_virtualModes_ = Omega_virtualModes_i; 
             prodTN_node_i.extra_virtualExtents_ = Omega_virtualExtents_i;
 
-            std::vector<int32_t> modesOutSite = prodTN->GetTensorModes(i);
-            std::vector<int64_t> extentsOutSite = prodTN->GetTensorExtents(i);
+            std::vector<int32_t> modesOutSite = prodTN.GetTensorModes(i);
+            std::vector<int64_t> extentsOutSite = prodTN.GetTensorExtents(i);
 
-            size_t dimOut = prodTN->GetTensorSize(i);
+            size_t dimOut = prodTN.GetTensorSize(i);
 
             void* tensorOut;
             HANDLE_CUDA_ERROR(cudaMalloc(&tensorOut, dimOut * sizeof(complexType)));
@@ -3486,19 +3575,19 @@ namespace QTensorNet
                                                 modesOutSite,
                                                 dimOut,
                                                 tensorOut,
-                                                prodTN->streams_.at(stream_num),
-                                                0.8 / static_cast<double>(prodTN->numStreams_),
-                                                prodTN->workSpaceLimit_,
+                                                prodTN.streams_.at(stream_num),
+                                                0.8 / static_cast<double>(prodTN.numStreams_),
+                                                prodTN.workSpaceLimit_,
                                                 {{0, 1}},
-                                                prodTN->workSpacePreference_);
+                                                prodTN.workSpacePreference_);
 
-            HANDLE_CUDA_ERROR(cudaFree(prodTN->tensors_[i]));
-            prodTN->tensors_[i] = tensorOut;
+            HANDLE_CUDA_ERROR(cudaFree(prodTN.tensors_[i]));
+            prodTN.tensors_[i] = tensorOut;
         };        
 
         std::vector<bool> appied_nodes(numSites_, false);
 
-        for(const auto& [siteA, siteB] : prodTN->graphTraversalToRoot_)
+        for(const auto& [siteA, siteB] : prodTN.graphTraversalToRoot_)
         {
             if(!appied_nodes.at(siteA))
             {
@@ -3516,7 +3605,7 @@ namespace QTensorNet
 
             try
             {
-                prodTN->ExcludeExtraBond(siteA, siteB, stream_num, verbose);
+                prodTN.ExcludeExtraBond(siteA, siteB, stream_num, verbose);
             }
             catch(...){}
         }
@@ -4800,10 +4889,10 @@ namespace QTensorNet
                                          "The number of sites of the current TN differs from that of Omega TN.");
             }
 
-            if(graph_ != Omega->graph_)
+            if(!std::includes(graph_.begin(), graph_.end(), Omega->graph_.begin(), Omega->graph_.end()))
             {
                 throw std::runtime_error("TensorNetwork::EvaluateTensorNetDescriptorOfEffectiveOperator: "
-                                         "The graphs of the current TN and the Omega TN differ from each other.");
+                                         "The graph of the Omega TN must be a subgraph of the current TN.");
             }
 
             if(ConjPsi != nullptr) 
@@ -4945,8 +5034,8 @@ namespace QTensorNet
 
         std::vector<std::vector<int32_t>> modesIn(numInputTensors);
         std::vector<std::vector<int64_t>> extentsIn(numInputTensors);
-
-        std::vector<std::vector<int32_t>> ConjPsiphysModes(numSites_);
+        std::vector<const void*> tensorsIn(numInputTensors);
+        std::vector<cutensornetTensorQualifiers_t> qualifiersIn(numInputTensors);
 
         std::vector<size_t> processing_nodes;
 
@@ -4979,12 +5068,19 @@ namespace QTensorNet
             ConjPsi_extra_virtualModes = {currentConjPsiMode++, currentConjPsiMode++};
         }
 
-        std::vector<const void*> tensorsIn(numInputTensors);
-        std::vector<cutensornetTensorQualifiers_t> qualifiersIn(numInputTensors);
+        std::vector<std::vector<int32_t>> ConjPsiphysModes(numSites_);
+        std::vector<size_t> accessPoint(numSites_);
 
         for(size_t j = 0; j < numSites_; ++j) 
         {                   
             const size_t& i = (j < numprocessingNodes) ? processing_nodes[j] : keep_nodes[j - numprocessingNodes];
+
+            ConjPsiphysModes[j] = (ConjPsi == nullptr) ? nodes_[i].physModes_ : ConjPsi->nodes_[i].physModes_;
+            
+            std::transform(ConjPsiphysModes[j].begin(), ConjPsiphysModes[j].end(), ConjPsiphysModes[j].begin(), 
+                           [&currentMode](int32_t x) -> int32_t {return x + currentMode;});
+
+            accessPoint[i] = j;
 
             if(j < numprocessingNodes)
             {
@@ -5009,39 +5105,8 @@ namespace QTensorNet
                 qualifiersIn[j].isConjugate = 0;
                 qualifiersIn[j].isConstant = 1;
                 qualifiersIn[j].requiresGradient = 0;
-            }
 
-            size_t physModeSize;
-
-            if(ConjPsi != nullptr) 
-            {
-                physModeSize = ConjPsi->nodes_[i].physModes_.size();
-            }
-            else
-            {
-                physModeSize = nodes_[i].physModes_.size();
-            }
-
-            ConjPsiphysModes[j].resize(physModeSize);
-
-            for(auto& el : ConjPsiphysModes[j])
-            {
-                el = currentMode++;
-            }
-        }
-
-        std::vector<size_t> accessPoint(numSites_);
-
-        for(size_t j = 0; j < numSites_; ++j) 
-        {                   
-            const size_t& i = (j < numprocessingNodes) ? processing_nodes[j] : keep_nodes[j - numprocessingNodes];
-
-            accessPoint[i] = j;
-
-            if(j < numprocessingNodes)
-            {
                 std::vector<int32_t> conjpsi_modes_j = ConjPsiphysModes[j];
-
                 std::vector<int32_t> conjpsi_virtualModes_j = (ConjPsi == nullptr) ? nodes_[i].virtualModes_ : ConjPsi->nodes_[i].virtualModes_;
 
                 if(middle)
@@ -5201,6 +5266,84 @@ namespace QTensorNet
                                                                   omegaExtents_right.end(),
                                                                   1L,
                                                                   [](int64_t acc, const int64_t& current) {return acc * current;}));
+
+        if(!loopFree_ || !Omega->loopFree_)
+        {                      
+            modesIn.pop_back();
+            extentsIn.pop_back();
+            qualifiersIn.pop_back();
+            tensorsIn.pop_back();
+
+            std::vector<int32_t> omegaModes;
+            std::vector<int64_t> omegaExtents;
+
+            omegaModes.insert(omegaModes.end(), omegaModes_right.begin(), omegaModes_right.end());
+            omegaExtents.insert(omegaExtents.end(), omegaExtents_right.begin(), omegaExtents_right.end());
+
+            omegaModes.insert(omegaModes.end(), omegaModes_left.begin(), omegaModes_left.end());
+            omegaExtents.insert(omegaExtents.end(), omegaExtents_left.begin(), omegaExtents_left.end());
+
+            size_t omegaDim = static_cast<size_t>(std::accumulate(omegaExtents.begin(),
+                                                                  omegaExtents.end(),
+                                                                  1L,
+                                                                  [](int64_t acc, const int64_t& current) {return acc * current;}));
+
+            void* omegaTensor;
+            HANDLE_CUDA_ERROR(cudaMalloc(&omegaTensor, omegaDim * sizeof(complexType)));
+
+            CuTensorNetMethods::ContractTensors(modesIn,
+                                                extentsIn,
+                                                qualifiersIn,
+                                                tensorsIn,
+                                                omegaModes,
+                                                omegaDim,
+                                                omegaTensor,
+                                                streams_.at(stream_num),
+                                                0.8 / static_cast<double>(numStreams_),
+                                                workSpaceLimit_,
+                                                {},
+                                                workSpacePreference_,
+                                                optimizerAttributes,
+                                                CuTensorNetMethods::MPI_);
+
+            std::vector<std::vector<int32_t>> modesInNew(2UL);
+            std::vector<std::vector<int64_t>> extentsInNew(2UL);
+            std::vector<cutensornetTensorQualifiers_t> qualifiersInNew(2UL);
+            std::vector<const void*> tensorsInNew(2UL);
+
+            modesInNew[0UL] = omegaModes;
+            extentsInNew[0UL] = omegaExtents;
+
+            tensorsInNew[0UL] = omegaTensor;
+
+            qualifiersInNew[0UL].isConjugate = 0;
+            qualifiersInNew[0UL].isConstant = 1;
+            qualifiersInNew[0UL].requiresGradient = 0;
+
+            modesInNew[1UL] = omegaModes_left;
+            extentsInNew[1UL] = omegaExtents_left;
+
+            tensorsInNew[1UL] = nullptr;
+
+            qualifiersInNew[1UL].isConjugate = 0;
+            qualifiersInNew[1UL].isConstant = 1;
+            qualifiersInNew[1UL].requiresGradient = 0;
+
+            std::set<size_t> leave;
+
+            for(size_t i = 0UL; i < numSites_; ++i)
+            {
+                leave.insert(i);
+            }
+
+            cache.AddLeave(leave, omegaModes, omegaExtents, omegaTensor);
+            
+            return {tensorsInNew, TensorNetDescriptor(modesInNew, 
+                                                      extentsInNew, 
+                                                      qualifiersInNew, 
+                                                      omegaModes_right, 
+                                                      dimOut_right)};
+        }
 
         std::unordered_map<size_t, size_t> parent;
 
@@ -5450,16 +5593,10 @@ namespace QTensorNet
                                          "The number of sites of the current TN differs from that of Psi TN.");
             }
 
-            if(!Psi->loopFree_)
+            if(!std::includes(Psi->graph_.begin(), Psi->graph_.end(), graph_.begin(), graph_.end()))
             {
-                throw std::runtime_error("TensorNetwork::FindGroundStateUsing1DMRG: "
-                                         "The DMRG algorithm cannot be applied to loop TNs.");
-            }
-
-            if(graph_ != Psi->graph_)
-            {
-                throw std::runtime_error("TensorNetwork::FindGroundStateUsing1DMRG: "
-                                         "The graphs of the current TN and the Psi TN differ from each other.");
+                throw std::runtime_error("TensorNetwork::FindGroundStateUsing2DMRG: "
+                                         "The graph of the current TN must be a subgraph of the Psi TN.");
             }
 
             for(size_t i = 0; i < numSites_; ++i)
@@ -5524,6 +5661,8 @@ namespace QTensorNet
             }
         }
 
+        TensorNetwork Unit = UnitAs(*this);
+
         CachedLeaves cache;
 
         complexType previous_ground_value(1.0E150, 0.0);
@@ -5534,14 +5673,17 @@ namespace QTensorNet
         while(std::abs(previous_ground_value - new_ground_value) > error_threshold * std::abs(new_ground_value))
         {                 
             for(const auto& site : traversal)
-            {                                                                  
-                cache.EraseLeavesIf({site});
-                
-                if(site != orthogonalityCenter)
-                {
-                    cache.EraseLeavesIf(Psi->OrthogonalizeAround(site, orthogonalityCenter, stream_num));
+            {       
+                if(Psi->loopFree_ && loopFree_)
+                {                                                           
+                    cache.EraseLeavesIf({site});
 
-                    orthogonalityCenter = site;
+                    if(site != orthogonalityCenter)
+                    {
+                        cache.EraseLeavesIf(Psi->OrthogonalizeAround(site, orthogonalityCenter, stream_num));
+
+                        orthogonalityCenter = site;
+                    }
                 }
                 
                 auto [rThisInTensors, rThisTNDesc] = Psi->EvaluateTensorNetDescriptorOfEffectiveOperator(this, 
@@ -5552,32 +5694,65 @@ namespace QTensorNet
                                                                                                          stream_num,
                                                                                                          optimizerAttributes);
 
-                OperatorVectorProduct* rThisbyVecProduct = CuTensorNetMethods::BuildOperatorVectorProduct(rThisTNDesc,
-                                                                                                          rThisInTensors,
-                                                                                                          Psi->streams_.at(stream_num),
-                                                                                                          0.8 / static_cast<double>(numStreams_),
-                                                                                                          workSpaceLimit_,
-                                                                                                          workSpacePreference_,
-                                                                                                          optimizerAttributes,
-                                                                                                          numAutotuningIterations,
-                                                                                                          CuTensorNetMethods::MPI_);
+                std::pair<complexType, void*> eignsys;
 
-                auto eignsys = CuOperatorMethods::HeOperatorGroundState(rThisbyVecProduct->GetProductFunction(), 
-                                                                        rThisbyVecProduct->GetOutTensorSize(), 
-                                                                        Psi->tensors_[site]);
-                
+                if(Psi->loopFree_ && loopFree_)
+                {
+                    OperatorVectorProduct* rThisbyVecProduct = CuTensorNetMethods::BuildOperatorVectorProduct(rThisTNDesc,
+                                                                                                              rThisInTensors,
+                                                                                                              Psi->streams_.at(stream_num),
+                                                                                                              0.8 / static_cast<double>(numStreams_),
+                                                                                                              workSpaceLimit_,
+                                                                                                              workSpacePreference_,
+                                                                                                              optimizerAttributes,
+                                                                                                              numAutotuningIterations,
+                                                                                                              CuTensorNetMethods::MPI_);
+                    
+                    eignsys = CuOperatorMethods::HeOperatorGroundState(rThisbyVecProduct->GetProductFunction(), 
+                                                                       rThisbyVecProduct->GetOutTensorSize(), 
+                                                                       Psi->tensors_[site]);
+
+                    rThisbyVecProduct->ClearTNMetaData();
+                    delete rThisbyVecProduct;
+
+                    if(!cached)
+                    {
+                        cache.Clear();
+                    }
+                }
+                else
+                {
+                    CachedLeaves metric_cache;
+
+                    size_t dim = rThisTNDesc.GetOutTensorSize();
+                    
+                    auto [metricTensors, metricTNDesc] = Psi->EvaluateTensorNetDescriptorOfEffectiveOperator(&Unit, 
+                                                                                                             metric_cache,
+                                                                                                             {site},
+                                                                                                             nullptr,
+                                                                                                             false,
+                                                                                                             stream_num,
+                                                                                                             optimizerAttributes);
+
+                    void* inv_metricTensor = CuOperatorMethods::PseudoInverse(metricTensors.front(), dim, dim);
+
+                    metric_cache.Clear();
+
+                    void* fullOpTensor = CuOperatorMethods::MatMul(inv_metricTensor, 
+                                                                   rThisInTensors.front(), 
+                                                                   dim, dim, dim);
+
+                    HANDLE_CUDA_ERROR(cudaFree(inv_metricTensor));
+                    cache.Clear();
+
+                    eignsys = SlepcOperatorMethods::NonHeOperatorGroundState(fullOpTensor, dim, Psi->tensors_[site]);
+
+                    HANDLE_CUDA_ERROR(cudaFree(fullOpTensor));
+                }
+
                 HANDLE_CUDA_ERROR(cudaFree(Psi->tensors_[site]));
 
                 Psi->tensors_[site] = eignsys.second;
-
-                rThisbyVecProduct->ClearTNMetaData();
-
-                delete rThisbyVecProduct;
-
-                if(!cached)
-                {
-                    cache.Clear();
-                }
             }
 
             auto [norm_device, descNorm] = Psi->GetDensityMatrix({}, 
@@ -5589,7 +5764,14 @@ namespace QTensorNet
             HANDLE_CUDA_ERROR(cudaMemcpy((void*)(&norm_host), norm_device, sizeof(complexType), cudaMemcpyDeviceToHost));
             HANDLE_CUDA_ERROR(cudaFree(norm_device));
             
-            Psi->ApplyScalar(std::sqrt(start_norm_host) / std::sqrt(norm_host), {orthogonalityCenter});
+            if(Psi->loopFree_ && loopFree_)
+            {
+                Psi->ApplyScalar(std::sqrt(start_norm_host) / std::sqrt(norm_host),  {orthogonalityCenter});
+            }
+            else
+            {
+                Psi->ApplyScalar(std::sqrt(start_norm_host) / std::sqrt(norm_host));
+            }
                 
             previous_ground_value = new_ground_value;
 
@@ -5650,16 +5832,10 @@ namespace QTensorNet
                                          "The number of sites of the current TN differs from that of Psi TN.");
             }
 
-            if(!Psi->loopFree_)
+            if(!std::includes(Psi->graph_.begin(), Psi->graph_.end(), graph_.begin(), graph_.end()))
             {
                 throw std::runtime_error("TensorNetwork::FindGroundStateUsing2DMRG: "
-                                         "The DMRG algorithm cannot be applied to loop TNs.");
-            }
-
-            if(graph_ != Psi->graph_)
-            {
-                throw std::runtime_error("TensorNetwork::FindGroundStateUsing2DMRG: "
-                                         "The graphs of the current TN and the Psi TN differ from each other.");
+                                         "The graph of the current TN must be a subgraph of the Psi TN.");
             }
 
             for(size_t i = 0; i < numSites_; ++i)

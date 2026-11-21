@@ -16,6 +16,8 @@ Before building QTensorNet, make sure that the following dependencies are instal
 - yaml-cpp >= 0.8.0
 - CMake >= 3.20
 - MPI built with CUDA support (NVIDIA HPC SDK MPI is recommended)
+- PETSc >= 3.26 built with CUDA and MPI support
+- SLEPc >= 3.26
 
 Make sure that `nvcc`, the MPI compiler wrappers, and the required libraries are available in your `PATH` and `LD_LIBRARY_PATH`.
 
@@ -36,7 +38,7 @@ cmake --build build -j
 ```
 
 # Examples
-- **`TEBD1D`** implements the TEBD algorithm using the Suzuki–Trotter decomposition to simulate the dynamics of a local 1D system.
+- **`TEBD1D`** and **`TEBD2D`** implement the TEBD algorithm using the Suzuki–Trotter decomposition to simulate the dynamics of a local 1D and 2D systems, respectively.
 - **`RK1D`** implements the fourth-order Runge–Kutta method using the summation and vector-operator product operations defined for two TNs to simulate the dynamics of a non-local 1D spin network.
 - **`DMRGSquareKagome`** and **`DMRGHoneycomb`** apply the DMRG algorithm implemented in QTensorNet to evaluate the eigenvalue problem of non-local 2D spin networks on decorated square-kagome and honeycomb lattices, respectively.
 - **`TDVP3DSchrodingerComplete`** and **`TDVP3DvonNeumann`** apply the TDVP algorithm implemented in QTensorNet to simulate the dynamics of a non-local 3D spin network using the Schrödinger and von Neumann equations, respectively.
