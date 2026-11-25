@@ -1,19 +1,14 @@
 #pragma once
 
 #include <iostream>
-#include <utility>
 #include <complex>
 #include <vector>
-#include <chrono>
-#include <variant>
-#include <functional>
 
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 #include <cuComplex.h>
 #include <cusolverDn.h>
 #include <cublas_v2.h>
-#include <curand_kernel.h>
 
 #include "CuErrorUtils.hh"
 #include "CuHandle.hh"
@@ -24,32 +19,25 @@ namespace QTensorNet
     {
         using complexType = std::complex<double>;
 
-        std::pair<complexType, void*> HeOperatorGroundState(const std::variant<const void*, std::function<void(void*, void*)>>& A, 
-                                                            int n, 
-                                                            const void* x0 = nullptr,
-                                                            int kr_size = 30, 
-                                                            double eps = 1.0E-30);
-        std::pair<complexType, void*> HeOperatorGroundState(const void* A, 
-                                                            int n, 
-                                                            const void* x0 = nullptr,
-                                                            int kr_size = 30, 
-                                                            double eps = 1.0E-30);
-        std::pair<complexType, void*> HeOperatorGroundState(const std::function<void(void*, void*)>& A, 
-                                                            int n, 
-                                                            const void* x0 = nullptr,
-                                                            int kr_size = 30, 
-                                                            double eps = 1.0E-30);
-        double VonNeumannEntropy(const void* rho_matrix, 
-                                 size_t matrix_size);
+        double VonNeumannEntropy(const void* A, 
+                                 int64_t n);
         void* PseudoInverse(const void* A, 
-                            int m, 
-                            int n,
+                            int64_t m, 
+                            int64_t n,
                             double threshold = 1.0E-10);
         void* MatMul(const void* A, 
                      const void* B, 
-                     int m, 
-                     int k, 
-                     int n,
+                     int64_t m, 
+                     int64_t k, 
+                     int64_t n,
+                     cublasOperation_t op_A = CUBLAS_OP_N,
+                     cublasOperation_t op_B = CUBLAS_OP_N);
+        void* MatSum(const void* A,
+                     const void* B, 
+                     int64_t m,
+                     int64_t n,
+                     complexType alpha = complexType(1.0, 0.0),
+                     complexType beta = complexType(1.0, 0.0),
                      cublasOperation_t op_A = CUBLAS_OP_N,
                      cublasOperation_t op_B = CUBLAS_OP_N);
     }

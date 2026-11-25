@@ -1932,172 +1932,167 @@ namespace QTensorNet
             }
         }
 
+        if(pre_center_id == center_id)
+        {
+            return std::set<size_t>{};
+        }
+
         int32_t left_bond_mode = nextMode_;
 
         bool loop_free;
 
         graphTraversalType traversal = GetGraphTraversalToRoot(graph_, numSites_, center_id, loop_free);
-
-        if(loop_free)
-        {            
-            if((pre_center_id != std::numeric_limits<size_t>::max()) && (pre_center_id != center_id))
-            {
-                std::vector<size_t> parentMap(numSites_, std::numeric_limits<size_t>::max());
-            
-                for(const auto& edge : traversal) 
-                {
-                    parentMap[edge.first] = edge.second;
-                }
-            
-                graphTraversalType short_traversal;
-                size_t current = pre_center_id;
-            
-                while(current != center_id) 
-                {
-                    size_t parent = parentMap[current];
-
-                    if(parent == std::numeric_limits<size_t>::max()) 
-                    {
-                        throw std::runtime_error("TensorNetwork::OrthogonalizeAround: "
-                                                 "No path from pre_center_id to center_id.");
-                    }
-
-                    short_traversal.emplace_back(current, parent);
-
-                    current = parent;
-                }
-
-                traversal = short_traversal;
-            }
-            else if(pre_center_id == center_id)
-            {
-                return std::set<size_t>{};
-            }
-            
-            for(const auto& [siteA, siteB] : traversal)
-            {
-                auto& siteA_node = nodes_[siteA];
-                auto& siteB_node = nodes_[siteB];
-
-                auto itA = siteA_node.neighbors_.find(siteB);
-                auto itB = siteB_node.neighbors_.find(siteA);
-
-                size_t indexA = itA->second;
-                size_t indexB = itB->second;
-
-                size_t bond_indexA = siteA_node.physModes_.size() + indexA;
-                size_t bond_indexB = siteB_node.physModes_.size() + indexB;
-
-                std::vector<int32_t> modesInA = GetTensorModes(siteA, false);
-                std::vector<int64_t> extentsInA = GetTensorExtents(siteA, false);
-
-                int32_t right_bond_mode = modesInA[bond_indexA];
-                int64_t old_extentABbond = extentsInA[bond_indexA];
-
-                std::vector<int32_t> modesOutA = modesInA;
-                std::vector<int64_t> extentsOutA = extentsInA;
-
-                int64_t dimAwobond = static_cast<int64_t>(GetTensorSize(siteA, false)) / siteA_node.virtualExtents_[indexA];
-
-                int64_t new_extentABbond = std::min({dimAwobond, old_extentABbond});
-
-                modesOutA[bond_indexA] = left_bond_mode;
-                extentsOutA[bond_indexA] = new_extentABbond;
-
-                std::vector<int32_t> modesOutAr = {left_bond_mode, right_bond_mode};
-                std::vector<int64_t> extentsOutAr = {new_extentABbond, old_extentABbond};
-
-                void* tensorOutA;
-                void* tensorOutAr;
-
-                HANDLE_CUDA_ERROR(cudaMalloc(&tensorOutA, static_cast<size_t>(dimAwobond) * static_cast<size_t>(new_extentABbond) * sizeof(complexType)));
-                HANDLE_CUDA_ERROR(cudaMalloc(&tensorOutAr, static_cast<size_t>(new_extentABbond) * static_cast<size_t>(old_extentABbond) * sizeof(complexType)));
-
-                CuTensorNetMethods::ApplyTensorQR(modesInA,
-                                                  extentsInA,
-                                                  modesOutA,
-                                                  extentsOutA,
-                                                  modesOutAr,
-                                                  extentsOutAr,
-                                                  tensors_[siteA],
-                                                  tensorOutA,
-                                                  tensorOutAr,
-                                                  streams_.at(stream_num));
-
-                siteA_node.virtualExtents_[indexA] = new_extentABbond;
-
-                HANDLE_CUDA_ERROR(cudaFree(tensors_[siteA]));
-
-                tensors_[siteA] = tensorOutA;
-
-                std::vector<std::vector<int32_t>> modesInArB(2);
-                std::vector<std::vector<int64_t>> extentsInArB(2);
-
-                modesInArB[0] = modesOutAr;
-                extentsInArB[0] = extentsOutAr;
-
-                modesInArB[1] = GetTensorModes(siteB, false);
-                extentsInArB[1] = GetTensorExtents(siteB, false);
-
-                std::vector<const void*> tensorsInArB(2);
-
-                tensorsInArB[0] = tensorOutAr;
-                tensorsInArB[1] = tensors_[siteB];
-
-                std::vector<cutensornetTensorQualifiers_t> qualifiersInArB(2);
-
-                qualifiersInArB[0].isConjugate = 0;
-                qualifiersInArB[0].isConstant = 1;
-                qualifiersInArB[0].requiresGradient = 0;
-
-                qualifiersInArB[1].isConjugate = 0;
-                qualifiersInArB[1].isConstant = 1;
-                qualifiersInArB[1].requiresGradient = 0;
-
-                std::vector<int32_t> modesOutB = modesInArB[1];
-
-                modesOutB[bond_indexB] = left_bond_mode;
-
-                siteB_node.virtualExtents_[indexB] = new_extentABbond;
-
-                int64_t dimOutB = static_cast<int64_t>(GetTensorSize(siteB, false));
-
-                void* tensorOutB;
-                HANDLE_CUDA_ERROR(cudaMalloc(&tensorOutB, dimOutB * sizeof(complexType)));
-
-                CuTensorNetMethods::ContractTensors(modesInArB,
-                                                    extentsInArB,
-                                                    qualifiersInArB,
-                                                    tensorsInArB,
-                                                    modesOutB,
-                                                    dimOutB,
-                                                    tensorOutB,
-                                                    streams_.at(stream_num),
-                                                    0.8 / static_cast<double>(numStreams_),
-                                                    workSpaceLimit_,
-                                                    {{0, 1}},
-                                                    workSpacePreference_); 
-
-                HANDLE_CUDA_ERROR(cudaFree(tensorOutAr));
-                HANDLE_CUDA_ERROR(cudaFree(tensors_[siteB]));
-
-                tensors_[siteB] = tensorOutB;
-            }
-
-            std::set<size_t> visited_nodes;
-            
-            for(const auto& p : traversal) 
-            {
-                visited_nodes.insert(p.first);
-                visited_nodes.insert(p.second);
-            }
-
-            return visited_nodes;
-        }
-        else
+          
+        if(loop_free && (pre_center_id != std::numeric_limits<size_t>::max()))
         {
-            return std::set<size_t>{};
+            std::vector<size_t> parentMap(numSites_, std::numeric_limits<size_t>::max());
+        
+            for(const auto& edge : traversal) 
+            {
+                parentMap[edge.first] = edge.second;
+            }
+        
+            graphTraversalType short_traversal;
+            size_t current = pre_center_id;
+        
+            while(current != center_id) 
+            {
+                size_t parent = parentMap[current];
+
+                if(parent == std::numeric_limits<size_t>::max()) 
+                {
+                    throw std::runtime_error("TensorNetwork::OrthogonalizeAround: "
+                                             "No path from pre_center_id to center_id.");
+                }
+
+                short_traversal.emplace_back(current, parent);
+
+                current = parent;
+            }
+
+            traversal = short_traversal;
         }
+
+        for(const auto& [siteA, siteB] : traversal)
+        {
+            auto& siteA_node = nodes_[siteA];
+            auto& siteB_node = nodes_[siteB];
+
+            auto itA = siteA_node.neighbors_.find(siteB);
+            auto itB = siteB_node.neighbors_.find(siteA);
+
+            size_t indexA = itA->second;
+            size_t indexB = itB->second;
+
+            size_t bond_indexA = siteA_node.physModes_.size() + indexA;
+            size_t bond_indexB = siteB_node.physModes_.size() + indexB;
+
+            std::vector<int32_t> modesInA = GetTensorModes(siteA, false);
+            std::vector<int64_t> extentsInA = GetTensorExtents(siteA, false);
+
+            int32_t right_bond_mode = modesInA[bond_indexA];
+            int64_t old_extentABbond = extentsInA[bond_indexA];
+
+            std::vector<int32_t> modesOutA = modesInA;
+            std::vector<int64_t> extentsOutA = extentsInA;
+
+            int64_t dimAwobond = static_cast<int64_t>(GetTensorSize(siteA, false)) / siteA_node.virtualExtents_[indexA];
+
+            int64_t new_extentABbond = std::min({dimAwobond, old_extentABbond});
+
+            modesOutA[bond_indexA] = left_bond_mode;
+            extentsOutA[bond_indexA] = new_extentABbond;
+
+            std::vector<int32_t> modesOutAr = {left_bond_mode, right_bond_mode};
+            std::vector<int64_t> extentsOutAr = {new_extentABbond, old_extentABbond};
+
+            void* tensorOutA;
+            void* tensorOutAr;
+
+            HANDLE_CUDA_ERROR(cudaMalloc(&tensorOutA, static_cast<size_t>(dimAwobond) * static_cast<size_t>(new_extentABbond) * sizeof(complexType)));
+            HANDLE_CUDA_ERROR(cudaMalloc(&tensorOutAr, static_cast<size_t>(new_extentABbond) * static_cast<size_t>(old_extentABbond) * sizeof(complexType)));
+
+            CuTensorNetMethods::ApplyTensorQR(modesInA,
+                                              extentsInA,
+                                              modesOutA,
+                                              extentsOutA,
+                                              modesOutAr,
+                                              extentsOutAr,
+                                              tensors_[siteA],
+                                              tensorOutA,
+                                              tensorOutAr,
+                                              streams_.at(stream_num));
+
+            siteA_node.virtualExtents_[indexA] = new_extentABbond;
+
+            HANDLE_CUDA_ERROR(cudaFree(tensors_[siteA]));
+
+            tensors_[siteA] = tensorOutA;
+
+            std::vector<std::vector<int32_t>> modesInArB(2);
+            std::vector<std::vector<int64_t>> extentsInArB(2);
+
+            modesInArB[0] = modesOutAr;
+            extentsInArB[0] = extentsOutAr;
+
+            modesInArB[1] = GetTensorModes(siteB, false);
+            extentsInArB[1] = GetTensorExtents(siteB, false);
+
+            std::vector<const void*> tensorsInArB(2);
+
+            tensorsInArB[0] = tensorOutAr;
+            tensorsInArB[1] = tensors_[siteB];
+
+            std::vector<cutensornetTensorQualifiers_t> qualifiersInArB(2);
+
+            qualifiersInArB[0].isConjugate = 0;
+            qualifiersInArB[0].isConstant = 1;
+            qualifiersInArB[0].requiresGradient = 0;
+
+            qualifiersInArB[1].isConjugate = 0;
+            qualifiersInArB[1].isConstant = 1;
+            qualifiersInArB[1].requiresGradient = 0;
+
+            std::vector<int32_t> modesOutB = modesInArB[1];
+
+            modesOutB[bond_indexB] = left_bond_mode;
+
+            siteB_node.virtualExtents_[indexB] = new_extentABbond;
+
+            int64_t dimOutB = static_cast<int64_t>(GetTensorSize(siteB, false));
+
+            void* tensorOutB;
+            HANDLE_CUDA_ERROR(cudaMalloc(&tensorOutB, dimOutB * sizeof(complexType)));
+
+            CuTensorNetMethods::ContractTensors(modesInArB,
+                                                extentsInArB,
+                                                qualifiersInArB,
+                                                tensorsInArB,
+                                                modesOutB,
+                                                dimOutB,
+                                                tensorOutB,
+                                                streams_.at(stream_num),
+                                                0.8 / static_cast<double>(numStreams_),
+                                                workSpaceLimit_,
+                                                {{0, 1}},
+                                                workSpacePreference_); 
+
+            HANDLE_CUDA_ERROR(cudaFree(tensorOutAr));
+            HANDLE_CUDA_ERROR(cudaFree(tensors_[siteB]));
+
+            tensors_[siteB] = tensorOutB;
+        }
+
+        std::set<size_t> visited_nodes;
+        
+        for(const auto& p : traversal) 
+        {
+            visited_nodes.insert(p.first);
+            visited_nodes.insert(p.second);
+        }
+
+        return visited_nodes;
+        
     }
 
     void TensorNetwork::Shrink(bool verbose, size_t stream_num)
@@ -5674,16 +5669,13 @@ namespace QTensorNet
         {                 
             for(const auto& site : traversal)
             {       
-                if(Psi->loopFree_ && loopFree_)
-                {                                                           
-                    cache.EraseLeavesIf({site});
+                cache.EraseLeavesIf({site});
 
-                    if(site != orthogonalityCenter)
-                    {
-                        cache.EraseLeavesIf(Psi->OrthogonalizeAround(site, orthogonalityCenter, stream_num));
+                if(site != orthogonalityCenter)
+                {
+                    cache.EraseLeavesIf(Psi->OrthogonalizeAround(site, orthogonalityCenter, stream_num));
 
-                        orthogonalityCenter = site;
-                    }
+                    orthogonalityCenter = site;
                 }
                 
                 auto [rThisInTensors, rThisTNDesc] = Psi->EvaluateTensorNetDescriptorOfEffectiveOperator(this, 
@@ -5708,9 +5700,10 @@ namespace QTensorNet
                                                                                                               numAutotuningIterations,
                                                                                                               CuTensorNetMethods::MPI_);
                     
-                    eignsys = CuOperatorMethods::HeOperatorGroundState(rThisbyVecProduct->GetProductFunction(), 
-                                                                       rThisbyVecProduct->GetOutTensorSize(), 
-                                                                       Psi->tensors_[site]);
+                    eignsys = SlepcOperatorMethods::OperatorGroundState(rThisbyVecProduct->GetProductFunction(), 
+                                                                        rThisbyVecProduct->GetOutTensorSize(), 
+                                                                        Psi->tensors_[site],
+                                                                        EPS_HEP);
 
                     rThisbyVecProduct->ClearTNMetaData();
                     delete rThisbyVecProduct;
@@ -5734,18 +5727,21 @@ namespace QTensorNet
                                                                                                              stream_num,
                                                                                                              optimizerAttributes);
 
-                    void* inv_metricTensor = CuOperatorMethods::PseudoInverse(metricTensors.front(), dim, dim);
+                    void* pinv_metricTensor = CuOperatorMethods::PseudoInverse(metricTensors.front(), dim, dim);
 
                     metric_cache.Clear();
 
-                    void* fullOpTensor = CuOperatorMethods::MatMul(inv_metricTensor, 
+                    void* fullOpTensor = CuOperatorMethods::MatMul(pinv_metricTensor, 
                                                                    rThisInTensors.front(), 
                                                                    dim, dim, dim);
 
-                    HANDLE_CUDA_ERROR(cudaFree(inv_metricTensor));
+                    HANDLE_CUDA_ERROR(cudaFree(pinv_metricTensor));
                     cache.Clear();
 
-                    eignsys = SlepcOperatorMethods::NonHeOperatorGroundState(fullOpTensor, dim, Psi->tensors_[site]);
+                    eignsys = SlepcOperatorMethods::OperatorGroundState(fullOpTensor, 
+                                                                        dim, 
+                                                                        Psi->tensors_[site], 
+                                                                        EPS_NHEP);
 
                     HANDLE_CUDA_ERROR(cudaFree(fullOpTensor));
                 }
@@ -5764,14 +5760,7 @@ namespace QTensorNet
             HANDLE_CUDA_ERROR(cudaMemcpy((void*)(&norm_host), norm_device, sizeof(complexType), cudaMemcpyDeviceToHost));
             HANDLE_CUDA_ERROR(cudaFree(norm_device));
             
-            if(Psi->loopFree_ && loopFree_)
-            {
-                Psi->ApplyScalar(std::sqrt(start_norm_host) / std::sqrt(norm_host),  {orthogonalityCenter});
-            }
-            else
-            {
-                Psi->ApplyScalar(std::sqrt(start_norm_host) / std::sqrt(norm_host));
-            }
+            Psi->ApplyScalar(std::sqrt(start_norm_host) / std::sqrt(norm_host), {orthogonalityCenter});
                 
             previous_ground_value = new_ground_value;
 
@@ -5891,6 +5880,8 @@ namespace QTensorNet
 
         graphTraversalType traversal = Psi->graphTraversalToRoot_;
 
+        TensorNetwork Unit = UnitAs(*this);
+
         CachedLeaves cache;
 
         complexType previous_ground_value(1.0E150, 0.0);
@@ -5903,10 +5894,12 @@ namespace QTensorNet
             for(const auto& [siteA, siteB] : traversal)
             {                                                                  
                 cache.EraseLeavesIf({siteA, siteB});
-                
+
                 if((siteA != orthogonalityCenter) && (siteB != orthogonalityCenter))
                 {
                     cache.EraseLeavesIf(Psi->OrthogonalizeAround(siteB, orthogonalityCenter, stream_num));
+
+                    orthogonalityCenter = siteB;
                 }
 
                 void* tensorABStart = Psi->ComputeTwoSiteVector(siteA, siteB, false, stream_num);
@@ -5919,30 +5912,69 @@ namespace QTensorNet
                                                                                                            stream_num,
                                                                                                            optimizerAttributes);
 
-                OperatorVectorProduct* rThisbyVecProductAB = CuTensorNetMethods::BuildOperatorVectorProduct(rThisTNDescAB,
-                                                                                                            rThisInTensors,
-                                                                                                            Psi->streams_.at(stream_num),
-                                                                                                            0.8 / static_cast<double>(numStreams_),
-                                                                                                            workSpaceLimit_,
-                                                                                                            workSpacePreference_,
-                                                                                                            optimizerAttributes,
-                                                                                                            numAutotuningIterations,
-                                                                                                            CuTensorNetMethods::MPI_);
+                std::pair<complexType, void*> eignsys;
 
-                auto eignsys = CuOperatorMethods::HeOperatorGroundState(rThisbyVecProductAB->GetProductFunction(), 
-                                                                        rThisbyVecProductAB->GetOutTensorSize(), 
-                                                                        tensorABStart);
-                
-                HANDLE_CUDA_ERROR(cudaFree(tensorABStart));
-
-                rThisbyVecProductAB->ClearTNMetaData();
-
-                delete rThisbyVecProductAB;
-
-                if(!cached)
+                if(Psi->loopFree_ && loopFree_)
                 {
-                    cache.Clear();
+                    OperatorVectorProduct* rThisbyVecProductAB = CuTensorNetMethods::BuildOperatorVectorProduct(rThisTNDescAB,
+                                                                                                                rThisInTensors,
+                                                                                                                Psi->streams_.at(stream_num),
+                                                                                                                0.8 / static_cast<double>(numStreams_),
+                                                                                                                workSpaceLimit_,
+                                                                                                                workSpacePreference_,
+                                                                                                                optimizerAttributes,
+                                                                                                                numAutotuningIterations,
+                                                                                                                CuTensorNetMethods::MPI_);
+
+                    eignsys = SlepcOperatorMethods::OperatorGroundState(rThisbyVecProductAB->GetProductFunction(), 
+                                                                        rThisbyVecProductAB->GetOutTensorSize(), 
+                                                                        tensorABStart,
+                                                                        EPS_HEP);
+                    
+                    
+
+                    rThisbyVecProductAB->ClearTNMetaData();
+                    delete rThisbyVecProductAB;
+
+                    if(!cached)
+                    {
+                        cache.Clear();
+                    }
                 }
+                else
+                {
+                    CachedLeaves metric_cache;
+
+                    size_t dim = rThisTNDescAB.GetOutTensorSize();
+                    
+                    auto [metricTensors, metricTNDescAB] = Psi->EvaluateTensorNetDescriptorOfEffectiveOperator(&Unit, 
+                                                                                                               metric_cache,
+                                                                                                               {siteA, siteB},
+                                                                                                               nullptr,
+                                                                                                               false,
+                                                                                                               stream_num,
+                                                                                                               optimizerAttributes);
+
+                    void* pinv_metricTensor = CuOperatorMethods::PseudoInverse(metricTensors.front(), dim, dim);
+
+                    metric_cache.Clear();
+
+                    void* fullOpTensor = CuOperatorMethods::MatMul(pinv_metricTensor, 
+                                                                   rThisInTensors.front(), 
+                                                                   dim, dim, dim);
+
+                    HANDLE_CUDA_ERROR(cudaFree(pinv_metricTensor));
+                    cache.Clear();
+
+                    eignsys = SlepcOperatorMethods::OperatorGroundState(fullOpTensor, 
+                                                                        dim, 
+                                                                        tensorABStart, 
+                                                                        EPS_NHEP);
+
+                    HANDLE_CUDA_ERROR(cudaFree(fullOpTensor));
+                }
+
+                HANDLE_CUDA_ERROR(cudaFree(tensorABStart));
                 
                 int64_t extentABbond = max_virtual_extents.empty() ? 0L :
                                        static_cast<int64_t>(max_virtual_extents[std::min({iter, max_virtual_extents.size() - 1UL})]);
@@ -5954,7 +5986,10 @@ namespace QTensorNet
                                       stream_num, 
                                       (verbose >= 2UL) ? true : false);
 
-                orthogonalityCenter = siteB;
+                if(Psi->loopFree_ && loopFree_)
+                {
+                    orthogonalityCenter = siteB;
+                }
 
                 HANDLE_CUDA_ERROR(cudaFree(eignsys.second));
             }

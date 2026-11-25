@@ -4,366 +4,37 @@ namespace QTensorNet
 {
     namespace CuOperatorMethods
     {
-        __global__ void InitRandomVectorKernel(cuDoubleComplex* v, int n, unsigned long long seed) 
-        {
-            int i = blockIdx.x * blockDim.x + threadIdx.x;
-
-            if(i < n) 
-            {
-                curandState state;
-                curand_init(seed, i, 0, &state);
-
-                double real_part = curand_uniform_double(&state) * 2.0 - 1.0;
-                double imag_part = curand_uniform_double(&state) * 2.0 - 1.0;
-
-                v[i] = make_cuDoubleComplex(real_part, imag_part);
-            }
-        }
-
-        __global__ void FillTmatrixKernel(double* __restrict__ T, const double* __restrict__ alpha, const double* __restrict__ beta, int m) 
-        {
-            int i = blockIdx.x * blockDim.x + threadIdx.x;
-            int j = blockIdx.y * blockDim.y + threadIdx.y;
-
-            if(i < m && j < m) 
-            {
-                double val = 0.0;
-
-                if(i == j) 
-                {
-                    val = alpha[i];
-                }
-                else if(i == j + 1) 
-                {
-                    val = beta[j];
-                }
-                else if(j == i + 1) 
-                {
-                    val = beta[i];
-                }
-
-                T[i + j * m] = val;
-            }
-        }
-
-        __global__ void ConvertDoubleVectorToComplexVectorKernel(cuDoubleComplex* __restrict__ vc, const double* __restrict__ vd, int n) 
-        {
-            int i = blockIdx.x * blockDim.x + threadIdx.x;
-
-            if(i < n) 
-            {
-                vc[i] = make_cuDoubleComplex(vd[i], 0.0);
-            }
-        }
-
-        std::pair<complexType, void*> HeOperatorGroundState(const std::variant<const void*, std::function<void(void*, void*)>>& A, 
-                                                            int n, const void* x0, int kr_size, double eps)
-        {
-            int m = std::min(n, kr_size);
-
-            cusolverDnHandle_t cusolver_handle = CuHandle::GetCuSolverDnHandle();
-            cublasHandle_t cublas_handle = CuHandle::GetCuBlasHandle();
-
-            cudaStream_t prev_cublas_stream = nullptr;
-            cudaStream_t prev_cusolver_stream = nullptr;
-            cublasPointerMode_t prev_pointer_mode;
-
-            HANDLE_CUBLAS_ERROR(cublasGetStream(cublas_handle, &prev_cublas_stream));
-            HANDLE_CUBLAS_ERROR(cublasGetPointerMode(cublas_handle, &prev_pointer_mode));
-            HANDLE_CUSOLVER_ERROR(cusolverDnGetStream(cusolver_handle, &prev_cusolver_stream));
-
-            cudaStream_t stream;
-            HANDLE_CUDA_ERROR(cudaStreamCreate(&stream));
-
-            HANDLE_CUBLAS_ERROR(cublasSetStream(cublas_handle, stream));
-            HANDLE_CUBLAS_ERROR(cublasSetPointerMode(cublas_handle, CUBLAS_POINTER_MODE_HOST));
-            HANDLE_CUSOLVER_ERROR(cusolverDnSetStream(cusolver_handle, stream));
-
-            cuDoubleComplex *d_V, *d_w, *d_projections;
-            HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_V, n * m * sizeof(cuDoubleComplex)));
-            HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_w, n * sizeof(cuDoubleComplex)));
-            HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_projections, m * sizeof(cuDoubleComplex)));
-
-            double *d_alpha, *d_beta;
-            HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_alpha, m * sizeof(double)));
-            HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_beta, (m - 1) * sizeof(double)));
-
-            cuDoubleComplex zero = make_cuDoubleComplex(0.0, 0.0); 
-            cuDoubleComplex one = make_cuDoubleComplex(1.0, 0.0); 
-            cuDoubleComplex neg_one = make_cuDoubleComplex(-1.0, 0.0);
-
-            if(x0 == nullptr)
-            {
-                int blockSize_1 = 256;
-                int numBlocks_1 = (n + blockSize_1 - 1) / blockSize_1;
-
-                auto now_1 = std::chrono::high_resolution_clock::now();
-                unsigned long long seed_1 = static_cast<unsigned long long>(
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(now_1.time_since_epoch()).count()
-                );
-
-                InitRandomVectorKernel <<< numBlocks_1, blockSize_1, 0, stream >>> (d_V, n, seed_1);
-            }
-            else
-            {
-                HANDLE_CUBLAS_ERROR(cublasZcopy(cublas_handle, n, static_cast<const cuDoubleComplex*>(x0), 1, d_V, 1));
-            }
-
-            double v0_norm;
-            HANDLE_CUBLAS_ERROR(cublasDznrm2(cublas_handle, n, d_V, 1, &v0_norm));
-
-            cuDoubleComplex inv_v0_norm_c = make_cuDoubleComplex(1.0 / v0_norm, 0.0);
-            HANDLE_CUBLAS_ERROR(cublasZscal(cublas_handle, n, &inv_v0_norm_c, d_V, 1));
-
-            for(int j = 0; j < m; ++j) 
-            {
-                // w'_j = A * v_j
-                if(auto ptr = std::get_if<const void*>(&A)) 
-                {
-                    HANDLE_CUBLAS_ERROR(cublasZgemv(cublas_handle, 
-                                                    CUBLAS_OP_N, 
-                                                    n, n, 
-                                                    &one, 
-                                                    static_cast<const cuDoubleComplex*>(*ptr), 
-                                                    n, d_V + j * n, 1, 
-                                                    &zero, 
-                                                    d_w, 1));
-                } 
-                else if(auto func = std::get_if<std::function<void(void*, void*)>>(&A)) 
-                {
-                    HANDLE_CUDA_ERROR(cudaStreamSynchronize(stream));
-
-                    (*func)(static_cast<void*>(d_V + j * n), static_cast<void*>(d_w));
-                }
-
-                // w'_j = w'_j - beta_j * v_{j-1}
-                if(j > 0) 
-                {
-                    HANDLE_CUDA_ERROR(cudaStreamSynchronize(stream));
-                    
-                    double b_j;
-                    HANDLE_CUDA_ERROR(cudaMemcpy(&b_j, d_beta + j - 1, sizeof(double), cudaMemcpyDeviceToHost));
-
-                    cuDoubleComplex neg_b_j = make_cuDoubleComplex(-b_j, 0.0);
-                    HANDLE_CUBLAS_ERROR(cublasZaxpy(cublas_handle, n, &neg_b_j, d_V + (j - 1) * n, 1, d_w, 1));
-                }
-
-                // alpha_j = <w'_j | v_j>
-                cuDoubleComplex a_j;
-                HANDLE_CUBLAS_ERROR(cublasZdotc(cublas_handle, n, d_w, 1, d_V + j * n, 1, &a_j));
-                HANDLE_CUDA_ERROR(cudaMemcpyAsync(d_alpha + j, &a_j.x, sizeof(double), cudaMemcpyHostToDevice, stream));
-
-                // w_j = w'_j - alpha_j * v_j
-                cuDoubleComplex neg_a_j = make_cuDoubleComplex(-a_j.x, 0.0);
-                HANDLE_CUBLAS_ERROR(cublasZaxpy(cublas_handle, n, &neg_a_j, d_V + j * n, 1, d_w, 1));
-
-                // Gram–Schmidt orthogonalization
-                HANDLE_CUBLAS_ERROR(cublasZgemv(cublas_handle, CUBLAS_OP_C, n, j + 1, &one, d_V, n, d_w, 1, &zero, d_projections, 1));
-                HANDLE_CUBLAS_ERROR(cublasZgemv(cublas_handle, CUBLAS_OP_N, n, j + 1, &neg_one, d_V, n, d_projections, 1, &one, d_w, 1));
-
-                // beta_{j+1} = ||w_j||
-                double b_jp1;
-                HANDLE_CUBLAS_ERROR(cublasDznrm2(cublas_handle, n, d_w, 1, &b_jp1));
-
-                if(j < m - 1) 
-                {
-                    if(b_jp1 < eps) 
-                    { 
-                        b_jp1 = 0.0;
-
-                        int blockSize_2 = 256;
-                        int numBlocks_2 = (n + blockSize_2 - 1) / blockSize_2;
-
-                        auto now_2 = std::chrono::high_resolution_clock::now();
-                        unsigned long long seed_2 = static_cast<unsigned long long>(
-                            std::chrono::duration_cast<std::chrono::nanoseconds>(now_2.time_since_epoch()).count()
-                        );
-
-                        InitRandomVectorKernel <<< numBlocks_2, blockSize_2, 0, stream >>> (d_w, n, seed_2);
-
-                        double vjp1_norm;
-                        HANDLE_CUBLAS_ERROR(cublasDznrm2(cublas_handle, n, d_w, 1, &vjp1_norm));
-
-                        cuDoubleComplex inv_vjp1_norm_c = make_cuDoubleComplex(1.0 / vjp1_norm, 0.0);
-                        HANDLE_CUBLAS_ERROR(cublasZscal(cublas_handle, n, &inv_vjp1_norm_c, d_w, 1));
-
-                        HANDLE_CUBLAS_ERROR(cublasZgemv(cublas_handle, CUBLAS_OP_C, n, j + 1, &one, d_V, n, d_w, 1, &zero, d_projections, 1));
-                        HANDLE_CUBLAS_ERROR(cublasZgemv(cublas_handle, CUBLAS_OP_N, n, j + 1, &neg_one, d_V, n, d_projections, 1, &one, d_w, 1));
-
-                        HANDLE_CUBLAS_ERROR(cublasDznrm2(cublas_handle, n, d_w, 1, &vjp1_norm));
-
-                        inv_vjp1_norm_c = make_cuDoubleComplex(1.0 / vjp1_norm, 0.0);
-                        HANDLE_CUBLAS_ERROR(cublasZscal(cublas_handle, n, &inv_vjp1_norm_c, d_w, 1));
-                    }
-                    else
-                    {
-                        // v_{j+1} = w_j / beta_{j+1}
-                        cuDoubleComplex inv_bjp1_c = make_cuDoubleComplex(1.0 / b_jp1, 0.0);
-                        HANDLE_CUBLAS_ERROR(cublasZscal(cublas_handle, n, &inv_bjp1_c, d_w, 1));
-                    }
-
-                    HANDLE_CUDA_ERROR(cudaMemcpyAsync(d_beta + j, &b_jp1, sizeof(double), cudaMemcpyHostToDevice, stream));
-
-                    HANDLE_CUBLAS_ERROR(cublasZcopy(cublas_handle, n, d_w, 1, d_V + (j + 1) * n, 1));
-                }
-            }
-
-            double *d_T, *d_eigenvalues;
-            HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_T, m * m * sizeof(double)));
-            HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_eigenvalues, m * sizeof(double)));
-
-            dim3 block(16, 16);
-            dim3 grid((m + block.x - 1) / block.x, (m + block.y - 1) / block.y);
-
-            FillTmatrixKernel <<< grid, block, 0, stream >>> (d_T, d_alpha, d_beta, m);
-
-            int lwork = 0;
-
-            HANDLE_CUSOLVER_ERROR(cusolverDnDsyevd_bufferSize(cusolver_handle, 
-                                                              CUSOLVER_EIG_MODE_VECTOR, 
-                                                              CUBLAS_FILL_MODE_LOWER, 
-                                                              m, 
-                                                              d_T, 
-                                                              m,
-                                                              d_eigenvalues, 
-                                                              &lwork));
-
-            double *d_work;
-            HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_work, lwork * sizeof(double)));
-
-            int *d_info;
-            HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_info, sizeof(int)));
-
-            HANDLE_CUSOLVER_ERROR(cusolverDnDsyevd(cusolver_handle, 
-                                                   CUSOLVER_EIG_MODE_VECTOR, 
-                                                   CUBLAS_FILL_MODE_LOWER, 
-                                                   m, 
-                                                   d_T, 
-                                                   m, 
-                                                   d_eigenvalues, 
-                                                   d_work, 
-                                                   lwork, 
-                                                   d_info));
-
-            int h_info = 0;
-            HANDLE_CUDA_ERROR(cudaMemcpy(&h_info, d_info, sizeof(int), cudaMemcpyDeviceToHost));
-
-            if(h_info != 0) 
-            {            
-                HANDLE_CUBLAS_ERROR(cublasSetStream(cublas_handle, prev_cublas_stream));
-                HANDLE_CUBLAS_ERROR(cublasSetPointerMode(cublas_handle, prev_pointer_mode));
-                HANDLE_CUSOLVER_ERROR(cusolverDnSetStream(cusolver_handle, prev_cusolver_stream));
-                
-                HANDLE_CUDA_ERROR(cudaStreamDestroy(stream));
-
-                HANDLE_CUDA_ERROR(cudaFree(d_V)); 
-                HANDLE_CUDA_ERROR(cudaFree(d_w)); 
-                HANDLE_CUDA_ERROR(cudaFree(d_projections));
-                HANDLE_CUDA_ERROR(cudaFree(d_alpha)); 
-                HANDLE_CUDA_ERROR(cudaFree(d_beta));
-                HANDLE_CUDA_ERROR(cudaFree(d_T)); 
-                HANDLE_CUDA_ERROR(cudaFree(d_eigenvalues));
-                HANDLE_CUDA_ERROR(cudaFree(d_work)); 
-                HANDLE_CUDA_ERROR(cudaFree(d_info)); 
-            
-                throw std::runtime_error("CuOperatorMethods::HeOperatorGroundState: cusolverDnDsyevd failed with info = " + std::to_string(h_info));
-            }
-
-            double h_ground_energy;
-            HANDLE_CUDA_ERROR(cudaMemcpy(&h_ground_energy, d_eigenvalues, sizeof(double), cudaMemcpyDeviceToHost));
-
-            cuDoubleComplex *d_ground_state;
-            HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_ground_state, n * sizeof(cuDoubleComplex)));
-
-            double *d_y_d;
-            HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_y_d, m * sizeof(double)));
-            HANDLE_CUDA_ERROR(cudaMemcpy(d_y_d, d_T, m * sizeof(double), cudaMemcpyDeviceToDevice));
-
-            cuDoubleComplex *d_y_c;
-            HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_y_c, m * sizeof(cuDoubleComplex)));
-
-            int blockSize_3 = 256;
-            int numBlocks_3 = (m + blockSize_3 - 1) / blockSize_3;
-
-            ConvertDoubleVectorToComplexVectorKernel <<< numBlocks_3, blockSize_3, 0, stream >>> (d_y_c, d_y_d, m);
-
-            HANDLE_CUBLAS_ERROR(cublasZgemv(cublas_handle, CUBLAS_OP_N, n, m, &one, d_V, n, d_y_c, 1, &zero, d_ground_state, 1));
-
-            double gs_norm;
-            HANDLE_CUBLAS_ERROR(cublasDznrm2(cublas_handle, n, d_ground_state, 1, &gs_norm));
-
-            cuDoubleComplex inv_gs_norm_c = make_cuDoubleComplex(1.0 / gs_norm, 0.0);
-            HANDLE_CUBLAS_ERROR(cublasZscal(cublas_handle, n, &inv_gs_norm_c, d_ground_state, 1));
-
-            HANDLE_CUDA_ERROR(cudaStreamSynchronize(stream));
-
-            HANDLE_CUBLAS_ERROR(cublasSetStream(cublas_handle, prev_cublas_stream));
-            HANDLE_CUBLAS_ERROR(cublasSetPointerMode(cublas_handle, prev_pointer_mode));
-            HANDLE_CUSOLVER_ERROR(cusolverDnSetStream(cusolver_handle, prev_cusolver_stream));
-            
-            HANDLE_CUDA_ERROR(cudaStreamDestroy(stream));
-
-            HANDLE_CUDA_ERROR(cudaFree(d_V)); 
-            HANDLE_CUDA_ERROR(cudaFree(d_w)); 
-            HANDLE_CUDA_ERROR(cudaFree(d_projections));
-            HANDLE_CUDA_ERROR(cudaFree(d_alpha)); 
-            HANDLE_CUDA_ERROR(cudaFree(d_beta));
-            HANDLE_CUDA_ERROR(cudaFree(d_T)); 
-            HANDLE_CUDA_ERROR(cudaFree(d_eigenvalues));
-            HANDLE_CUDA_ERROR(cudaFree(d_work)); 
-            HANDLE_CUDA_ERROR(cudaFree(d_info)); 
-            HANDLE_CUDA_ERROR(cudaFree(d_y_d));
-            HANDLE_CUDA_ERROR(cudaFree(d_y_c));
-
-            return std::make_pair(complexType(h_ground_energy, 0.0), static_cast<void*>(d_ground_state));
-        }
-
-        std::pair<complexType, void*> HeOperatorGroundState(const void* A, int n, const void* x0, int kr_size, double eps) 
-        {
-            return HeOperatorGroundState(std::variant<const void*, std::function<void(void*, void*)>>(A),
-                                         n, x0, kr_size, eps);
-        }
-
-        std::pair<complexType, void*> HeOperatorGroundState(const std::function<void(void*, void*)>& A, 
-                                                            int n, const void* x0, int kr_size, double eps) 
-        {
-            return HeOperatorGroundState(std::variant<const void*, std::function<void(void*, void*)>>(A),
-                                         n, x0, kr_size, eps);
-        }
-
-        double VonNeumannEntropy(const void* rho_matrix, size_t matrix_size)
+        double VonNeumannEntropy(const void* A, int64_t n)
         {
             cusolverDnHandle_t cusolver_handle = CuHandle::GetCuSolverDnHandle();
 
             cusolverDnParams_t params;
             HANDLE_CUSOLVER_ERROR(cusolverDnCreateParams(&params));
 
-            cuDoubleComplex* d_rho;
-            HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_rho, matrix_size * matrix_size * sizeof(cuDoubleComplex)));
-            HANDLE_CUDA_ERROR(cudaMemcpy(d_rho, rho_matrix, matrix_size * matrix_size * sizeof(cuDoubleComplex), cudaMemcpyDeviceToDevice));
+            cuDoubleComplex* d_A;
+            HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_A, n * n * sizeof(cuDoubleComplex)));
+            HANDLE_CUDA_ERROR(cudaMemcpy(d_A, A, n * n * sizeof(cuDoubleComplex), cudaMemcpyDeviceToDevice));
 
             cuDoubleComplex* d_eigenvalues;
-            HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_eigenvalues, matrix_size * sizeof(cuDoubleComplex)));
-
-            int64_t size = static_cast<int64_t>(matrix_size);
+            HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_eigenvalues, n * sizeof(cuDoubleComplex)));
 
             size_t device_work_size, host_work_size;
             HANDLE_CUSOLVER_ERROR(cusolverDnXgeev_bufferSize(cusolver_handle,
                                                              params,
                                                              CUSOLVER_EIG_MODE_NOVECTOR,
                                                              CUSOLVER_EIG_MODE_NOVECTOR,
-                                                             size,
+                                                             n,
                                                              CUDA_C_64F,
-                                                             d_rho,
-                                                             size,
+                                                             d_A,
+                                                             n,
                                                              CUDA_C_64F,
                                                              d_eigenvalues,
                                                              CUDA_C_64F,
                                                              nullptr,
-                                                             size,
+                                                             n,
                                                              CUDA_C_64F,
                                                              nullptr,
-                                                             size,
+                                                             n,
                                                              CUDA_C_64F,
                                                              &device_work_size,
                                                              &host_work_size));
@@ -380,18 +51,18 @@ namespace QTensorNet
                                                   params,
                                                   CUSOLVER_EIG_MODE_NOVECTOR,
                                                   CUSOLVER_EIG_MODE_NOVECTOR,
-                                                  size,
+                                                  n,
                                                   CUDA_C_64F,
-                                                  d_rho,
-                                                  size,
+                                                  d_A,
+                                                  n,
                                                   CUDA_C_64F,
                                                   d_eigenvalues,
                                                   CUDA_C_64F,
                                                   nullptr,
-                                                  size,
+                                                  n,
                                                   CUDA_C_64F,
                                                   nullptr,
-                                                  size,
+                                                  n,
                                                   CUDA_C_64F,
                                                   d_work,
                                                   device_work_size,
@@ -405,7 +76,7 @@ namespace QTensorNet
             if(h_info != 0) 
             {
                 free(h_work);
-                HANDLE_CUDA_ERROR(cudaFree(d_rho));
+                HANDLE_CUDA_ERROR(cudaFree(d_A));
                 HANDLE_CUDA_ERROR(cudaFree(d_eigenvalues));
                 HANDLE_CUDA_ERROR(cudaFree(d_work));
                 HANDLE_CUDA_ERROR(cudaFree(d_info));
@@ -422,8 +93,8 @@ namespace QTensorNet
                 }
             }
 
-            std::vector<complexType> eigenvalues(matrix_size);
-            HANDLE_CUDA_ERROR(cudaMemcpy(eigenvalues.data(), d_eigenvalues, matrix_size * sizeof(complexType), cudaMemcpyDeviceToHost));
+            std::vector<complexType> eigenvalues(n);
+            HANDLE_CUDA_ERROR(cudaMemcpy(eigenvalues.data(), d_eigenvalues, n * sizeof(complexType), cudaMemcpyDeviceToHost));
 
             double entropy = 0.0;
 
@@ -438,7 +109,7 @@ namespace QTensorNet
             }
 
             free(h_work);
-            HANDLE_CUDA_ERROR(cudaFree(d_rho));
+            HANDLE_CUDA_ERROR(cudaFree(d_A));
             HANDLE_CUDA_ERROR(cudaFree(d_eigenvalues));
             HANDLE_CUDA_ERROR(cudaFree(d_work));
             HANDLE_CUDA_ERROR(cudaFree(d_info));
@@ -447,9 +118,9 @@ namespace QTensorNet
             return entropy;
         }
 
-        __global__ void ComputeInverseSingularValuesKernel(cuDoubleComplex* __restrict__ inv_s, const double* __restrict__ s, int n, double threshold) 
+        __global__ void ComputeInverseSingularValuesKernel(cuDoubleComplex* __restrict__ inv_s, const double* __restrict__ s, int64_t n, double threshold) 
         {
-            int i = blockIdx.x * blockDim.x + threadIdx.x;
+            int64_t i = blockIdx.x * blockDim.x + threadIdx.x;
         
             if(i < n) 
             {
@@ -459,7 +130,7 @@ namespace QTensorNet
             }
         }
 
-        void* PseudoInverse(const void* A, int m, int n, double threshold)
+        void* PseudoInverse(const void* A, int64_t m, int64_t n, double threshold)
         {
             cusolverDnHandle_t cusolver_handle = CuHandle::GetCuSolverDnHandle();
             cublasHandle_t cublas_handle = CuHandle::GetCuBlasHandle();
@@ -479,7 +150,10 @@ namespace QTensorNet
             HANDLE_CUBLAS_ERROR(cublasSetPointerMode(cublas_handle, CUBLAS_POINTER_MODE_HOST));
             HANDLE_CUSOLVER_ERROR(cusolverDnSetStream(cusolver_handle, stream));
 
-            int min_mn = std::min(m, n);
+            cusolverDnParams_t params;
+            HANDLE_CUSOLVER_ERROR(cusolverDnCreateParams(&params));
+
+            int64_t min_mn = std::min(m, n);
 
             cuDoubleComplex* d_A;
             HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_A, m * n * sizeof(cuDoubleComplex)));
@@ -494,33 +168,58 @@ namespace QTensorNet
             cuDoubleComplex* d_VH;
             HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_VH, min_mn * n * sizeof(cuDoubleComplex)));
 
-            int lwork = 0;
-            HANDLE_CUSOLVER_ERROR(cusolverDnZgesvd_bufferSize(cusolver_handle, m, n, &lwork));
+            size_t device_work_size, host_work_size;
+            HANDLE_CUSOLVER_ERROR(cusolverDnXgesvd_bufferSize(cusolver_handle,
+                                                              params,
+                                                              'S',
+                                                              'S',
+                                                              m,
+                                                              n,
+                                                              CUDA_C_64F,
+                                                              d_A,
+                                                              m,
+                                                              CUDA_R_64F,
+                                                              d_S,
+                                                              CUDA_C_64F,
+                                                              d_U,
+                                                              m,
+                                                              CUDA_C_64F,
+                                                              d_VH,
+                                                              min_mn,
+                                                              CUDA_C_64F,
+                                                              &device_work_size,
+                                                              &host_work_size));
 
-            cuDoubleComplex* d_work;
-            HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_work, lwork * sizeof(cuDoubleComplex)));
-
-            double* d_rwork;
-            HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_rwork, (min_mn - 1) * sizeof(double)));
-
+            void* d_work;
+            HANDLE_CUDA_ERROR(cudaMalloc(&d_work, device_work_size));
+            
+            void* h_work = malloc(host_work_size);
+            
             int* d_info;
             HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_info, sizeof(int)));
 
-            HANDLE_CUSOLVER_ERROR(cusolverDnZgesvd(cusolver_handle,
-                                                   'S', 
+            HANDLE_CUSOLVER_ERROR(cusolverDnXgesvd(cusolver_handle,
+                                                   params,
                                                    'S',
-                                                   m, 
+                                                   'S',
+                                                   m,
                                                    n,
-                                                   d_A, 
+                                                   CUDA_C_64F,
+                                                   d_A,
                                                    m,
+                                                   CUDA_R_64F,
                                                    d_S,
-                                                   d_U, 
+                                                   CUDA_C_64F,
+                                                   d_U,
                                                    m,
-                                                   d_VH, 
+                                                   CUDA_C_64F,
+                                                   d_VH,
                                                    min_mn,
-                                                   d_work, 
-                                                   lwork,
-                                                   d_rwork,
+                                                   CUDA_C_64F,
+                                                   d_work,
+                                                   device_work_size,
+                                                   h_work,
+                                                   host_work_size,
                                                    d_info));
 
             int h_info = 0;
@@ -534,13 +233,14 @@ namespace QTensorNet
 
                 HANDLE_CUDA_ERROR(cudaStreamDestroy(stream));
 
+                free(h_work);
                 HANDLE_CUDA_ERROR(cudaFree(d_A));
                 HANDLE_CUDA_ERROR(cudaFree(d_S));
                 HANDLE_CUDA_ERROR(cudaFree(d_U));
                 HANDLE_CUDA_ERROR(cudaFree(d_VH));
                 HANDLE_CUDA_ERROR(cudaFree(d_work));
-                HANDLE_CUDA_ERROR(cudaFree(d_rwork));
                 HANDLE_CUDA_ERROR(cudaFree(d_info));
+                HANDLE_CUSOLVER_ERROR(cusolverDnDestroyParams(params));
 
                 throw std::runtime_error("PseudoInverse: cusolverDnZgesvd failed with info = " + std::to_string(h_info));
             }
@@ -548,42 +248,42 @@ namespace QTensorNet
             cuDoubleComplex* d_inv_s;
             HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_inv_s, min_mn * sizeof(cuDoubleComplex)));
 
-            int blockSize = 256;
-            int numBlocks = (min_mn + blockSize - 1) / blockSize;
+            int64_t blockSize = 256;
+            int64_t numBlocks = (min_mn + blockSize - 1) / blockSize;
 
             cuDoubleComplex alpha = make_cuDoubleComplex(1.0, 0.0);
             cuDoubleComplex beta  = make_cuDoubleComplex(0.0, 0.0);
 
             ComputeInverseSingularValuesKernel <<< numBlocks, blockSize, 0, stream >>> (d_inv_s, d_S, min_mn, threshold);
 
-            HANDLE_CUBLAS_ERROR(cublasZdgmm(cublas_handle,
-                                            CUBLAS_SIDE_RIGHT,
-                                            m, 
-                                            min_mn,
-                                            d_U, 
-                                            m,
-                                            d_inv_s, 
-                                            1,
-                                            d_U, 
-                                            m));
+            HANDLE_CUBLAS_ERROR(cublasZdgmm_64(cublas_handle,
+                                               CUBLAS_SIDE_RIGHT,
+                                               m, 
+                                               min_mn,
+                                               d_U, 
+                                               m,
+                                               d_inv_s, 
+                                               1,
+                                               d_U, 
+                                               m));
 
             cuDoubleComplex* d_A_plus;
             HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_A_plus, n * m * sizeof(cuDoubleComplex)));
 
-            HANDLE_CUBLAS_ERROR(cublasZgemm(cublas_handle,
-                                            CUBLAS_OP_C, 
-                                            CUBLAS_OP_C,
-                                            n, 
-                                            m, 
-                                            min_mn,
-                                            &alpha,
-                                            d_VH, 
-                                            min_mn,
-                                            d_U, 
-                                            m,
-                                            &beta,
-                                            d_A_plus, 
-                                            n));
+            HANDLE_CUBLAS_ERROR(cublasZgemm_64(cublas_handle,
+                                               CUBLAS_OP_C, 
+                                               CUBLAS_OP_C,
+                                               n, 
+                                               m, 
+                                               min_mn,
+                                               &alpha,
+                                               d_VH, 
+                                               min_mn,
+                                               d_U, 
+                                               m,
+                                               &beta,
+                                               d_A_plus, 
+                                               n));
 
             HANDLE_CUDA_ERROR(cudaStreamSynchronize(stream));
 
@@ -593,19 +293,20 @@ namespace QTensorNet
 
             HANDLE_CUDA_ERROR(cudaStreamDestroy(stream));
 
+            free(h_work);
             HANDLE_CUDA_ERROR(cudaFree(d_A));
             HANDLE_CUDA_ERROR(cudaFree(d_S));
             HANDLE_CUDA_ERROR(cudaFree(d_U));
             HANDLE_CUDA_ERROR(cudaFree(d_VH));
             HANDLE_CUDA_ERROR(cudaFree(d_work));
-            HANDLE_CUDA_ERROR(cudaFree(d_rwork));
             HANDLE_CUDA_ERROR(cudaFree(d_info));
             HANDLE_CUDA_ERROR(cudaFree(d_inv_s));
+            HANDLE_CUSOLVER_ERROR(cusolverDnDestroyParams(params));
 
             return static_cast<void*>(d_A_plus);
         }
 
-        void* MatMul(const void* A, const void* B, int m, int k, int n, cublasOperation_t op_A, cublasOperation_t op_B)
+        void* MatMul(const void* A, const void* B, int64_t m, int64_t k, int64_t n, cublasOperation_t op_A, cublasOperation_t op_B)
         {
             cublasHandle_t cublas_handle = CuHandle::GetCuBlasHandle();
 
@@ -621,8 +322,8 @@ namespace QTensorNet
             HANDLE_CUBLAS_ERROR(cublasSetStream(cublas_handle, stream));
             HANDLE_CUBLAS_ERROR(cublasSetPointerMode(cublas_handle, CUBLAS_POINTER_MODE_HOST));
 
-            int lda = (op_A == CUBLAS_OP_N) ? m : k;
-            int ldb = (op_B == CUBLAS_OP_N) ? k : n;
+            int64_t lda = (op_A == CUBLAS_OP_N) ? m : k;
+            int64_t ldb = (op_B == CUBLAS_OP_N) ? k : n;
 
             cuDoubleComplex* d_C;
             HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_C, m * n * sizeof(cuDoubleComplex)));
@@ -630,20 +331,20 @@ namespace QTensorNet
             cuDoubleComplex alpha = make_cuDoubleComplex(1.0, 0.0);
             cuDoubleComplex beta = make_cuDoubleComplex(0.0, 0.0);
 
-            HANDLE_CUBLAS_ERROR(cublasZgemm(cublas_handle,
-                                            op_A, 
-                                            op_B,
-                                            m, 
-                                            n, 
-                                            k,
-                                            &alpha,
-                                            static_cast<const cuDoubleComplex*>(A), 
-                                            lda,
-                                            static_cast<const cuDoubleComplex*>(B), 
-                                            ldb,
-                                            &beta,
-                                            d_C, 
-                                            m));
+            HANDLE_CUBLAS_ERROR(cublasZgemm_64(cublas_handle,
+                                               op_A, 
+                                               op_B,
+                                               m, 
+                                               n, 
+                                               k,
+                                               &alpha,
+                                               static_cast<const cuDoubleComplex*>(A), 
+                                               lda,
+                                               static_cast<const cuDoubleComplex*>(B), 
+                                               ldb,
+                                               &beta,
+                                               d_C, 
+                                               m));
 
             HANDLE_CUDA_ERROR(cudaStreamSynchronize(stream));
 
@@ -652,6 +353,55 @@ namespace QTensorNet
 
             HANDLE_CUDA_ERROR(cudaStreamDestroy(stream));
 
+            return static_cast<void*>(d_C);
+        }
+
+        void* MatSum(const void* A, const void* B, int64_t m, int64_t n, complexType alpha, complexType beta, cublasOperation_t op_A, cublasOperation_t op_B)
+        {
+            cublasHandle_t cublas_handle = CuHandle::GetCuBlasHandle();
+        
+            cudaStream_t prev_cublas_stream = nullptr;
+            cublasPointerMode_t prev_pointer_mode;
+        
+            HANDLE_CUBLAS_ERROR(cublasGetStream(cublas_handle, &prev_cublas_stream));
+            HANDLE_CUBLAS_ERROR(cublasGetPointerMode(cublas_handle, &prev_pointer_mode));
+        
+            cudaStream_t stream;
+            HANDLE_CUDA_ERROR(cudaStreamCreate(&stream));
+        
+            HANDLE_CUBLAS_ERROR(cublasSetStream(cublas_handle, stream));
+            HANDLE_CUBLAS_ERROR(cublasSetPointerMode(cublas_handle, CUBLAS_POINTER_MODE_HOST));
+        
+            int64_t lda = (op_A == CUBLAS_OP_N) ? m : n;
+            int64_t ldb = (op_B == CUBLAS_OP_N) ? m : n;
+        
+            cuDoubleComplex* d_C;
+            HANDLE_CUDA_ERROR(cudaMalloc((void**)&d_C, m * n * sizeof(cuDoubleComplex)));
+        
+            cuDoubleComplex cu_alpha = make_cuDoubleComplex(alpha.real(), alpha.imag());
+            cuDoubleComplex cu_beta  = make_cuDoubleComplex(beta.real(), beta.imag());
+        
+            HANDLE_CUBLAS_ERROR(cublasZgeam_64(cublas_handle,
+                                               op_A,
+                                               op_B,
+                                               m,
+                                               n,
+                                               &cu_alpha,
+                                               static_cast<const cuDoubleComplex*>(A),
+                                               lda,
+                                               &cu_beta,
+                                               static_cast<const cuDoubleComplex*>(B),
+                                               ldb,
+                                               d_C,
+                                               m));
+            
+            HANDLE_CUDA_ERROR(cudaStreamSynchronize(stream));
+            
+            HANDLE_CUBLAS_ERROR(cublasSetStream(cublas_handle, prev_cublas_stream));
+            HANDLE_CUBLAS_ERROR(cublasSetPointerMode(cublas_handle, prev_pointer_mode));
+            
+            HANDLE_CUDA_ERROR(cudaStreamDestroy(stream));
+            
             return static_cast<void*>(d_C);
         }
     }
